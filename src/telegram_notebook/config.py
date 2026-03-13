@@ -58,7 +58,7 @@ def get_settings() -> Settings:
     settings = Settings(
         app_name=_str_env("APP_NAME", "Telegram Notebook") or "Telegram Notebook",
         data_dir=Path(_str_env("DATA_DIR", "data") or "data"),
-        db_path=Path(_str_env("DB_PATH", "data/store.json") or "data/store.json"),
+        db_path=Path(_str_env("DB_PATH", "data/store.db") or "data/store.db"),
         media_dir=Path(_str_env("MEDIA_DIR", "data/media") or "data/media"),
         telegram_api_id=_int_env("TELEGRAM_API_ID"),
         telegram_api_hash=_str_env("TELEGRAM_API_HASH"),
