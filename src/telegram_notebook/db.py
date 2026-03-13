@@ -305,6 +305,41 @@ class Repository:
             )
         return rows
 
+    def list_channels(self) -> list[dict[str, Any]]:
+        with self.lock:
+            data = self._load()
+            return [dict(c) for c in data["channels"]]
+
+    def delete_channel_data(self, *, channel_url: str) -> bool:
+        with self.lock:
+            data = self._load()
+            channel = next((c for c in data["channels"] if c["channel_url"] == channel_url), None)
+            if not channel:
+                return False
+            
+            channel_id = int(channel["id"])
+            
+            # پیدا کردن تمام پیام‌های این کانال
+            message_ids = [int(m["id"]) for m in data["messages"] if int(m["channel_id"]) == channel_id]
+            
+            # پیدا کردن تمام مدیاهای این پیام‌ها
+            media_ids = [int(md["id"]) for md in data["media_items"] if int(md["message_id"]) in message_ids]
+            
+            # حذف چانک‌ها
+            data["chunks"] = [ch for ch in data["chunks"] if int(ch["media_item_id"]) not in media_ids]
+            
+            # حذف مدیاها
+            data["media_items"] = [md for md in data["media_items"] if int(md["id"]) not in media_ids]
+            
+            # حذف پیام‌ها
+            data["messages"] = [m for m in data["messages"] if int(m["id"]) not in message_ids]
+            
+            # حذف خود کانال
+            data["channels"] = [c for c in data["channels"] if int(c["id"]) != channel_id]
+            
+            self._save(data)
+            return True
+
     def upsert_bot_user(
         self,
         *,

@@ -150,8 +150,22 @@ class NotebookBot:
             )
             return
         if text.startswith("/search"):
+            # چک کردن برای فلگ منبع
+            source_url = None
             query = text.removeprefix("/search").strip()
-            self._search(chat_id, query)
+            if " --source " in query:
+                parts = query.split(" --source ")
+                query = parts[0].strip()
+                source_url = parts[1].strip()
+            
+            self._search(chat_id, query, source_url)
+            return
+        if text.startswith("/sources"):
+            self._handle_sources(chat_id)
+            return
+        if text.startswith("/delete"):
+            link = text.removeprefix("/delete").strip()
+            self._handle_delete(chat_id, link)
             return
 
         flow = self.services.repository.get_auth_flow(bot_user_id=bot_user_id)
@@ -417,11 +431,11 @@ class NotebookBot:
             text=f"اکانت متصل است.\nPhone: {masked}\nConnected at: {user.get('connected_at')}",
         )
 
-    def _search(self, chat_id: int, query: str) -> None:
+    def _search(self, chat_id: int, query: str, source_url: str | None = None) -> None:
         if not query:
-            self.services.api.send_message(chat_id=chat_id, text="بعد از /search یک query بنویس.")
+            self.services.api.send_message(chat_id=chat_id, text="بعد از /search یک query بنویس. مثال:\n/search عمان\nیا:\n/search عمان --source https://t.me/...")
             return
-        results = self.services.search_service.search(query=query, channel_url=None, top_k=5)
+        results = self.services.search_service.search(query=query, channel_url=source_url, top_k=5)
         if not results:
             self.services.api.send_message(chat_id=chat_id, text="نتیجه‌ای پیدا نشد.")
             return
@@ -431,6 +445,27 @@ class NotebookBot:
             link = f"\n{item.message_url}" if item.message_url else ""
             lines.append(f"- {header}\n{item.chunk_text[:280]}{link}")
         self.services.api.send_message(chat_id=chat_id, text="\n\n".join(lines))
+
+    def _handle_sources(self, chat_id: int) -> None:
+        channels = self.services.repository.list_channels()
+        if not channels:
+            self.services.api.send_message(chat_id=chat_id, text="هنوز منبعی ایندکس نشده.")
+            return
+        lines = ["لیست منابع ایندکس شده:"]
+        for c in channels:
+            title = c.get("channel_title") or "بدون نام"
+            lines.append(f"- {title}: {c['channel_url']}")
+        self.services.api.send_message(chat_id=chat_id, text="\n".join(lines))
+
+    def _handle_delete(self, chat_id: int, link: str) -> None:
+        if not link:
+            self.services.api.send_message(chat_id=chat_id, text="لینک منبع را برای حذف بفرست: /delete https://t.me/...")
+            return
+        success = self.services.repository.delete_channel_data(channel_url=link)
+        if success:
+            self.services.api.send_message(chat_id=chat_id, text=f"تمامی اطلاعات مربوط به {link} با موفقیت از دیتابیس پاک شد.")
+        else:
+            self.services.api.send_message(chat_id=chat_id, text="این منبع در دیتابیس پیدا نشد.")
 
     def _handle_join(self, chat_id: int, bot_user_id: int, link: str) -> None:
         if not link:
