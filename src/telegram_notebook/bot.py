@@ -155,9 +155,9 @@ class NotebookBot:
         self.services.repository.update_auth_flow_status(bot_user_id=bot_user_id, status="awaiting_gemini_key")
         
         guide_text = (
-            "<b>Step 2: Vertex AI (Gemini) Key</b>\n"
-            "Go to <a href='https://aistudio.google.com/app/apikey'>Google AI Studio</a> and get your API Key.\n"
-            "Then send it here (starts with AIza):"
+            "<b>Step 2: Vertex AI API Key</b>\n"
+            "Please provide your Vertex AI API Key (starts with AQ.) or AI Studio Key (starts with AIza).\n"
+            "Then send it here:"
         )
         
         photo_path = Path("data/media/gemini_guide.jpg")
@@ -167,9 +167,11 @@ class NotebookBot:
             self.services.api.send_message(chat_id=chat_id, text=guide_text, reply_markup=TelegramBotApi.remove_keyboard())
 
     def _handle_gemini_key(self, chat_id: int, bot_user_id: int, text: str) -> None:
-        if not text.startswith("AIza"):
-            self.services.api.send_message(chat_id=chat_id, text="Invalid Key.")
+        # Allow both AI Studio (AIza) and Vertex (AQ.) prefixes
+        if not (text.startswith("AIza") or text.startswith("AQ.")):
+            self.services.api.send_message(chat_id=chat_id, text="Invalid Key format. It should start with 'AIza' or 'AQ.'.")
             return
+        
         self.services.repository.update_user_gemini_key(bot_user_id=bot_user_id, api_key=text)
         self.services.repository.update_auth_flow_status(bot_user_id=bot_user_id, status="awaiting_v_project")
         self.services.api.send_message(chat_id=chat_id, text="<b>Step 3: Vertex AI Search Config</b>\nPlease enter your Google Cloud <b>Project ID</b>:")
