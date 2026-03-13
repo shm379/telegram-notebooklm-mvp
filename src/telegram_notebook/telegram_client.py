@@ -141,6 +141,17 @@ async def iter_media_messages(
     return list(reversed(results))
 
 
+async def download_message_media(
+    client: Any,
+    *,
+    media_message: MediaMessage,
+    target_dir: Path,
+) -> Path | None:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    downloaded = await client.download_media(media_message.source_message, file=target_dir)
+    return Path(downloaded) if downloaded else None
+
+
 async def join_chat(client: Any, link: str) -> str:
     from telethon.tl.functions.messages import ImportChatInviteRequest
     from telethon.tl.functions.channels import JoinChannelRequest
