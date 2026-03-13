@@ -76,7 +76,12 @@ class Repository:
                         connected_at TEXT,
                         preferred_transcription_model TEXT DEFAULT 'gemini-2.0-flash-lite',
                         preferred_embedding_model TEXT DEFAULT 'text-embedding-004',
-                        gemini_api_key TEXT
+                        gemini_api_key TEXT,
+                        vertex_project_id TEXT,
+                        vertex_region TEXT,
+                        vertex_index_id TEXT,
+                        vertex_endpoint_id TEXT,
+                        vertex_deployed_index_id TEXT
                     )
                 """)
                 conn.execute("""
@@ -88,7 +93,12 @@ class Repository:
                         api_hash TEXT,
                         session_string TEXT,
                         phone_code_hash TEXT,
-                        status TEXT
+                        status TEXT,
+                        vertex_project_id TEXT,
+                        vertex_region TEXT,
+                        vertex_index_id TEXT,
+                        vertex_endpoint_id TEXT,
+                        vertex_deployed_index_id TEXT
                     )
                 """)
                 conn.commit()
@@ -223,7 +233,23 @@ class Repository:
                 conn.commit()
                 return True
 
-    def upsert_bot_user(self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str | None) -> dict[str, Any]:
+    def get_chunk_with_metadata(self, chunk_id: int) -> dict[str, Any] | None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("""
+                    SELECT c.text as chunk_text, mi.media_kind, mi.file_name,
+                           m.message_url, m.caption, ch.channel_title, ch.channel_url
+                    FROM chunks c
+                    JOIN media_items mi ON c.media_item_id = mi.id
+                    JOIN messages m ON mi.message_id = m.id
+                    JOIN channels ch ON m.channel_id = ch.id
+                    WHERE c.id = ?
+                """, (chunk_id,)).fetchone()
+                return dict(row) if row else None
+
+    def upsert_bot_user(
+self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str | None) -> dict[str, Any]:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.execute("""
@@ -248,13 +274,15 @@ class Repository:
             with sqlite3.connect(self.path) as conn:
                 conn.execute("UPDATE bot_users SET phone = ? WHERE bot_user_id = ?", (phone, bot_user_id))
 
-    def save_bot_user_session(self, *, bot_user_id: int, phone: str, api_id: int | None, api_hash: str | None, session_string: str, connected_at: str) -> None:
+    def save_bot_user_session(self, *, bot_user_id: int, phone: str, api_id: int | None, api_hash: str | None, session_string: str, connected_at: str, 
+                              v_project: str | None = None, v_region: str | None = None, v_index: str | None = None, v_endpoint: str | None = None, v_deployed: str | None = None) -> None:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.execute("""
-                    UPDATE bot_users SET phone=?, api_id=?, api_hash=?, session_string=?, connected_at=?
+                    UPDATE bot_users SET phone=?, api_id=?, api_hash=?, session_string=?, connected_at=?,
+                                       vertex_project_id=?, vertex_region=?, vertex_index_id=?, vertex_endpoint_id=?, vertex_deployed_index_id=?
                     WHERE bot_user_id=?
-                """, (phone, api_id, api_hash, session_string, connected_at, bot_user_id))
+                """, (phone, api_id, api_hash, session_string, connected_at, v_project, v_region, v_index, v_endpoint, v_deployed, bot_user_id))
 
     def update_user_gemini_key(self, *, bot_user_id: int, api_key: str) -> None:
         with self.lock:
@@ -266,17 +294,22 @@ class Repository:
             with sqlite3.connect(self.path) as conn:
                 conn.execute("UPDATE bot_users SET preferred_transcription_model=?, preferred_embedding_model=? WHERE bot_user_id=?", (transcription_model, embedding_model, bot_user_id))
 
-    def upsert_auth_flow(self, *, bot_user_id: int, chat_id: int, phone: str, api_id: int | None, api_hash: str | None, session_string: str, phone_code_hash: str, status: str) -> dict[str, Any]:
+    def upsert_auth_flow(self, *, bot_user_id: int, chat_id: int, phone: str, api_id: int | None, api_hash: str | None, session_string: str, phone_code_hash: str, status: str,
+                        v_project: str | None = None, v_region: str | None = None, v_index: str | None = None, v_endpoint: str | None = None, v_deployed: str | None = None) -> dict[str, Any]:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.execute("""
-                    INSERT INTO auth_flows (bot_user_id, chat_id, phone, api_id, api_hash, session_string, phone_code_hash, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO auth_flows (bot_user_id, chat_id, phone, api_id, api_hash, session_string, phone_code_hash, status,
+                                          vertex_project_id, vertex_region, vertex_index_id, vertex_endpoint_id, vertex_deployed_index_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(bot_user_id) DO UPDATE SET
                         chat_id=excluded.chat_id, phone=excluded.phone, api_id=excluded.api_id,
                         api_hash=excluded.api_hash, session_string=excluded.session_string,
-                        phone_code_hash=excluded.phone_code_hash, status=excluded.status
-                """, (bot_user_id, chat_id, phone, api_id, api_hash, session_string, phone_code_hash, status))
+                        phone_code_hash=excluded.phone_code_hash, status=excluded.status,
+                        vertex_project_id=excluded.vertex_project_id, vertex_region=excluded.vertex_region,
+                        vertex_index_id=excluded.vertex_index_id, vertex_endpoint_id=excluded.vertex_endpoint_id,
+                        vertex_deployed_index_id=excluded.vertex_deployed_index_id
+                """, (bot_user_id, chat_id, phone, api_id, api_hash, session_string, phone_code_hash, status, v_project, v_region, v_index, v_endpoint, v_deployed))
                 conn.commit()
                 conn.row_factory = sqlite3.Row
                 return dict(conn.execute("SELECT * FROM auth_flows WHERE bot_user_id = ?", (bot_user_id,)).fetchone())

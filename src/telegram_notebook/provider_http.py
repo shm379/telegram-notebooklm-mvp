@@ -38,6 +38,64 @@ def _json_request(
         raise
 
 
+def vertex_ai_search(
+    *,
+    api_key: str,
+    project_id: str,
+    region: str,
+    index_endpoint_id: str,
+    deployed_index_id: str,
+    query_embedding: list[float],
+    top_k: int = 5,
+) -> list[dict[str, object]]:
+    # آدرس اختصاصی برای جستجوی وکتوری در Vertex AI
+    # https://cloud.google.com/vertex-ai/docs/vector-search/query-index-public-endpoint
+    url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/indexEndpoints/{index_endpoint_id}:findNeighbors?key={api_key}"
+    
+    payload = {
+        "deployed_index_id": deployed_index_id,
+        "queries": [
+            {
+                "datapoint": {"feature_vector": query_embedding},
+                "neighbor_count": top_k
+            }
+        ]
+    }
+    
+    data = _json_request(url=url, payload=payload)
+    results = []
+    if isinstance(data, dict):
+        nearest_neighbors = data.get("nearestNeighbors", [{}])[0].get("neighbors", [])
+        for n in nearest_neighbors:
+            results.append({
+                "id": n.get("datapoint", {}).get("datapointId"),
+                "distance": n.get("distance")
+            })
+    return results
+
+
+def vertex_ai_upsert(
+    *,
+    api_key: str,
+    project_id: str,
+    region: str,
+    index_id: str,
+    datapoints: list[dict[str, object]],
+) -> None:
+    # https://cloud.google.com/vertex-ai/docs/vector-search/upsert-datapoints
+    url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/indexes/{index_id}:upsertDatapoints?key={api_key}"
+    
+    payload = {
+        "datapoints": datapoints
+    }
+    
+    try:
+        _json_request(url=url, payload=payload)
+    except Exception as e:
+        print(f"Vertex AI Upsert Error: {e}")
+        raise
+
+
 def gemini_embed_text(
     *,
     api_key: str,
