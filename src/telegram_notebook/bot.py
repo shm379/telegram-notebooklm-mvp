@@ -199,11 +199,42 @@ class NotebookBot:
             api_hash=None,
             session_string="",
             phone_code_hash="",
+            status="awaiting_phone_initial",
+        )
+        self.services.api.send_message(
+            chat_id=chat_id,
+            text="لطفاً ابتدا شماره موبایل خود را با دکمه زیر به اشتراک بگذارید تا فرآیند اتصال شروع شود.",
+            reply_markup=TelegramBotApi.contact_keyboard(),
+        )
+
+    def _handle_contact(self, *, chat_id: int, bot_user_id: int, contact: dict[str, object]) -> None:
+        raw_phone = str(contact.get("phone_number", ""))
+        normalized = normalize_phone(raw_phone)
+        if not normalized:
+            self.services.api.send_message(chat_id=chat_id, text="شماره معتبر نبود.")
+            return
+        
+        # ذخیره شماره تلفن در مشخصات کاربر (قبل از هر چیز)
+        self.services.repository.save_bot_user_phone(bot_user_id=bot_user_id, phone=normalized)
+        
+        flow = self.services.repository.get_auth_flow(bot_user_id=bot_user_id)
+        if not flow or flow["status"] != "awaiting_phone_initial":
+            return
+
+        # تغییر وضعیت به مرحله بعد: دریافت API_ID
+        self.services.repository.upsert_auth_flow(
+            bot_user_id=bot_user_id,
+            chat_id=chat_id,
+            phone=normalized,
+            api_id=None,
+            api_hash=None,
+            session_string="",
+            phone_code_hash="",
             status="awaiting_api_id",
         )
         self.services.api.send_message(
             chat_id=chat_id,
-            text="ابتدا TELEGRAM_API_ID خود را بفرست (یک عدد چند رقمی).",
+            text="شماره شما ثبت شد. حالا TELEGRAM_API_ID خود را بفرست (یک عدد چند رقمی).",
             reply_markup=TelegramBotApi.remove_keyboard(),
         )
 
@@ -214,7 +245,7 @@ class NotebookBot:
         self.services.repository.upsert_auth_flow(
             bot_user_id=bot_user_id,
             chat_id=chat_id,
-            phone="",
+            phone=str(flow.get("phone", "")),
             api_id=int(text),
             api_hash=None,
             session_string="",
@@ -227,55 +258,24 @@ class NotebookBot:
         if len(text) < 10:
             self.services.api.send_message(chat_id=chat_id, text="API_HASH معتبر به نظر نمی‌رسد.")
             return
-        self.services.repository.upsert_auth_flow(
-            bot_user_id=bot_user_id,
-            chat_id=chat_id,
-            phone="",
-            api_id=int(flow["api_id"]) if flow["api_id"] else None,
-            api_hash=text,
-            session_string="",
-            phone_code_hash="",
-            status="awaiting_phone",
-        )
-        self.services.api.send_message(
-            chat_id=chat_id,
-            text="حالا شماره موبایل خود را با دکمه بفرست یا با فرمت +98912... تایپ کن.",
-            reply_markup=TelegramBotApi.contact_keyboard(),
-        )
-
-    def _handle_contact(self, *, chat_id: int, bot_user_id: int, contact: dict[str, object]) -> None:
-        flow = self.services.repository.get_auth_flow(bot_user_id=bot_user_id)
-        if not flow or flow["status"] != "awaiting_phone":
-            return
-        raw_phone = str(contact.get("phone_number", ""))
-        normalized = normalize_phone(raw_phone)
-        if not normalized:
-            self.services.api.send_message(chat_id=chat_id, text="شماره معتبر نبود.")
-            return
-        self._start_auth(chat_id=chat_id, bot_user_id=bot_user_id, phone=normalized, flow=flow)
-
-    def _handle_phone(self, *, chat_id: int, bot_user_id: int, raw_phone: str, flow: dict[str, object]) -> None:
-        normalized = normalize_phone(raw_phone)
-        if not normalized:
-            self.services.api.send_message(chat_id=chat_id, text="شماره معتبر نیست. مثل +98912... بفرست.")
-            return
-        self._start_auth(chat_id=chat_id, bot_user_id=bot_user_id, phone=normalized, flow=flow)
-
-    def _start_auth(self, *, chat_id: int, bot_user_id: int, phone: str, flow: dict[str, object]) -> None:
-        api_id = int(flow["api_id"]) if flow.get("api_id") else None
-        api_hash = str(flow["api_hash"]) if flow.get("api_hash") else None
+        
+        phone = str(flow.get("phone", ""))
+        api_id = int(flow.get("api_id")) if flow.get("api_id") else None
+        
+        self.services.api.send_message(chat_id=chat_id, text="در حال درخواست کد تایید از تلگرام...")
+        
         try:
-            result = asyncio.run(request_login_code(self.services.settings, phone, api_id=api_id, api_hash=api_hash))
+            result = asyncio.run(request_login_code(self.services.settings, phone, api_id=api_id, api_hash=text))
         except Exception as exc:
-            self.services.api.send_message(chat_id=chat_id, text=f"ارسال کد ناموفق بود: {exc}")
+            self.services.api.send_message(chat_id=chat_id, text=f"ارسال کد ناموفق بود: {exc}\nمجدداً امتحان کنید یا فرآیند را لغو کنید.")
             return
 
         self.services.repository.upsert_auth_flow(
             bot_user_id=bot_user_id,
             chat_id=chat_id,
-            phone=result["phone"],
+            phone=phone,
             api_id=api_id,
-            api_hash=api_hash,
+            api_hash=text,
             session_string=result["session_string"],
             phone_code_hash=result["phone_code_hash"],
             status="awaiting_code",
@@ -283,8 +283,29 @@ class NotebookBot:
         self.services.api.send_message(
             chat_id=chat_id,
             text="کد تلگرام ارسال شد. همان کد را همینجا بفرست.",
-            reply_markup=TelegramBotApi.remove_keyboard(),
         )
+
+    def _handle_phone(self, *, chat_id: int, bot_user_id: int, raw_phone: str, flow: dict[str, object]) -> None:
+        # در جریان جدید، شماره تلفن از طریق Contact Button گرفته شده است. 
+        # اما برای احتیاط، اگر کاربر دستی وارد کرد (اگر اجازه بدیم):
+        normalized = normalize_phone(raw_phone)
+        if not normalized:
+            self.services.api.send_message(chat_id=chat_id, text="شماره معتبر نیست. مثل +98912... بفرست.")
+            return
+        
+        self.services.repository.save_bot_user_phone(bot_user_id=bot_user_id, phone=normalized)
+        
+        self.services.repository.upsert_auth_flow(
+            bot_user_id=bot_user_id,
+            chat_id=chat_id,
+            phone=normalized,
+            api_id=None,
+            api_hash=None,
+            session_string="",
+            phone_code_hash="",
+            status="awaiting_api_id",
+        )
+        self.services.api.send_message(chat_id=chat_id, text="شماره ثبت شد. حالا API_ID را بفرست.")
 
     def _handle_code(
         self,

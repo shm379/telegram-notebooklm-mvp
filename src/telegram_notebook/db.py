@@ -351,6 +351,15 @@ class Repository:
                     return dict(user)
         return None
 
+    def save_bot_user_phone(self, *, bot_user_id: int, phone: str) -> None:
+        with self.lock:
+            data = self._load()
+            for user in data["bot_users"]:
+                if int(user["bot_user_id"]) == bot_user_id:
+                    user["phone"] = phone
+                    break
+            self._save(data)
+
     def save_bot_user_session(
         self,
         *,
