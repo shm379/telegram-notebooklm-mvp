@@ -373,10 +373,24 @@ class Repository:
                 "api_hash": None,
                 "session_string": None,
                 "connected_at": None,
+                "preferred_transcription_model": "gemini-2.0-flash-lite",
+                "preferred_embedding_model": "text-embedding-004",
             }
             data["bot_users"].append(record)
             self._save(data)
             return dict(record)
+
+    def update_user_models(self, *, bot_user_id: int, transcription_model: str | None = None, embedding_model: str | None = None) -> None:
+        with self.lock:
+            data = self._load()
+            for user in data["bot_users"]:
+                if int(user["bot_user_id"]) == bot_user_id:
+                    if transcription_model:
+                        user["preferred_transcription_model"] = transcription_model
+                    if embedding_model:
+                        user["preferred_embedding_model"] = embedding_model
+                    break
+            self._save(data)
 
     def get_bot_user(self, *, bot_user_id: int) -> dict[str, Any] | None:
         with self.lock:
