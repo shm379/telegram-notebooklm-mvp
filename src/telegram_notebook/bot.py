@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .bot_api import TelegramBotApi
 from .config import get_settings
-from .db import Repository, connect
+from .db import Repository
 from .embeddings import EmbeddingService
 from .pipeline import IngestionPipeline
 from .search import SearchService
