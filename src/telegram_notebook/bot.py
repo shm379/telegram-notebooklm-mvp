@@ -181,7 +181,7 @@ class NotebookBot:
 
     def _handle_v_region(self, chat_id, bot_user_id, text, flow):
         self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=None, api_hash=None, session_string="", phone_code_hash="", status="awaiting_v_index", v_project=flow["vertex_project_id"], v_region=text)
-        self.services.api.send_message(chat_id=chat_id, text="Enter your <b>Index ID</b> (Dimensions should be 768, Neighbors should be 10):")
+        self.services.api.send_message(chat_id=chat_id, text="Enter your <b>Index ID</b>:")
 
     def _handle_v_index(self, chat_id, bot_user_id, text, flow):
         self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=None, api_hash=None, session_string="", phone_code_hash="", status="awaiting_v_endpoint", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=text)
