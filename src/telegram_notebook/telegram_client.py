@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -252,7 +252,7 @@ async def sign_in_with_code(
         return {
             "status": "authorized",
             "session_string": client.session.save(),
-            "connected_at": datetime.now(UTC).isoformat(),
+            "connected_at": datetime.now(timezone.utc).isoformat(),
         }
 
 
@@ -273,5 +273,5 @@ async def sign_in_with_password(
         return {
             "status": "authorized",
             "session_string": client.session.save(),
-            "connected_at": datetime.now(UTC).isoformat(),
+            "connected_at": datetime.now(timezone.utc).isoformat(),
         }
