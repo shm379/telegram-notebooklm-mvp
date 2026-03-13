@@ -11,3 +11,4 @@ tqdm==4.67.3
 uvicorn==0.41.0
 fastapi==0.135.1
 python-socks[asyncio]
+requests
