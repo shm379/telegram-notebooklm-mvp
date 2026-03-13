@@ -64,6 +64,7 @@ class NotebookBot:
     def __init__(self, services: BotServices) -> None:
         self.services = services
         self.offset: int | None = None
+        self.executor = ThreadPoolExecutor(max_workers=4)
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
 
@@ -139,14 +140,10 @@ class NotebookBot:
             elif st == "awaiting_password": self._handle_password(chat_id, bot_user_id, text, flow)
 
     def _send_welcome(self, chat_id: int) -> None:
-        self.services.api.send_message(chat_id=chat_id, text="Welcome! I'm your AI Research Assistant.\nUse /connect to link your account.")
+        self.services.api.send_message(chat_id=chat_id, text="Welcome! I'm your AI Research Assistant.\nUse /connect to link your account and configure Vertex AI.")
 
     def _begin_connect(self, chat_id: int, bot_user_id: int) -> None:
-        self.services.repository.upsert_auth_flow(
-            bot_user_id=bot_user_id, chat_id=chat_id, phone="", 
-            api_id=None, api_hash=None, session_string="", phone_code_hash="",
-            status="awaiting_phone_initial"
-        )
+        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone="", api_id=None, api_hash=None, session_string="", phone_code_hash="", status="awaiting_phone_initial")
         self.services.api.send_message(chat_id=chat_id, text="<b>Step 1: Your Profile</b>\nPlease share your phone number to register in the system:", reply_markup=TelegramBotApi.contact_keyboard())
 
     def _handle_contact(self, chat_id: int, bot_user_id: int, contact: dict) -> None:
@@ -157,6 +154,7 @@ class NotebookBot:
         guide_text = (
             "<b>Step 2: Vertex AI API Key</b>\n"
             "Please provide your Vertex AI API Key (starts with AQ.) or AI Studio Key (starts with AIza).\n"
+            "You can get it from <a href='https://aistudio.google.com/app/apikey'>Google AI Studio</a>.\n"
             "Then send it here:"
         )
         
@@ -167,42 +165,40 @@ class NotebookBot:
             self.services.api.send_message(chat_id=chat_id, text=guide_text, reply_markup=TelegramBotApi.remove_keyboard())
 
     def _handle_gemini_key(self, chat_id: int, bot_user_id: int, text: str) -> None:
-        # Allow both AI Studio (AIza) and Vertex (AQ.) prefixes
         if not (text.startswith("AIza") or text.startswith("AQ.")):
             self.services.api.send_message(chat_id=chat_id, text="Invalid Key format. It should start with 'AIza' or 'AQ.'.")
             return
-        
         self.services.repository.update_user_gemini_key(bot_user_id=bot_user_id, api_key=text)
         self.services.repository.update_auth_flow_status(bot_user_id=bot_user_id, status="awaiting_v_project")
         self.services.api.send_message(chat_id=chat_id, text="<b>Step 3: Vertex AI Search Config</b>\nPlease enter your Google Cloud <b>Project ID</b>:")
 
     def _handle_v_project(self, chat_id, bot_user_id, text, flow):
-        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], status="awaiting_v_region", v_project=text)
+        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=None, api_hash=None, session_string="", phone_code_hash="", status="awaiting_v_region", v_project=text)
         self.services.api.send_message(chat_id=chat_id, text="Enter your <b>Region</b> (e.g., us-central1):")
 
     def _handle_v_region(self, chat_id, bot_user_id, text, flow):
-        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], status="awaiting_v_index", v_project=flow["vertex_project_id"], v_region=text)
-        self.services.api.send_message(chat_id=chat_id, text="Enter your <b>Index ID</b> (Dimensions should be 768):")
+        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=None, api_hash=None, session_string="", phone_code_hash="", status="awaiting_v_index", v_project=flow["vertex_project_id"], v_region=text)
+        self.services.api.send_message(chat_id=chat_id, text="Enter your <b>Index ID</b> (Dimensions should be 768, Neighbors should be 10):")
 
     def _handle_v_index(self, chat_id, bot_user_id, text, flow):
-        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], status="awaiting_v_endpoint", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=text)
+        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=None, api_hash=None, session_string="", phone_code_hash="", status="awaiting_v_endpoint", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=text)
         self.services.api.send_message(chat_id=chat_id, text="Enter your <b>Index Endpoint ID</b>:")
 
     def _handle_v_endpoint(self, chat_id, bot_user_id, text, flow):
-        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], status="awaiting_v_deployed", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=text)
+        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=None, api_hash=None, session_string="", phone_code_hash="", status="awaiting_v_deployed", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=text)
         self.services.api.send_message(chat_id=chat_id, text="Enter your <b>Deployed Index ID</b>:")
 
     def _handle_v_deployed(self, chat_id, bot_user_id, text, flow):
-        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], status="awaiting_api_id", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=text)
+        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=None, api_hash=None, session_string="", phone_code_hash="", status="awaiting_api_id", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=text)
         self.services.api.send_message(chat_id=chat_id, text="<b>Step 4: Telegram API</b>\nGo to <a href='https://my.telegram.org'>my.telegram.org</a> and create an app.\nSend your <b>API_ID</b>:")
 
     def _handle_api_id(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
         if not text.isdigit(): return
-        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=int(text), status="awaiting_api_hash", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=flow["vertex_deployed_index_id"])
+        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=int(text), api_hash=None, session_string="", phone_code_hash="", status="awaiting_api_hash", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=flow["vertex_deployed_index_id"])
         self.services.api.send_message(chat_id=chat_id, text="Send your <b>API_HASH</b>:")
 
     def _handle_api_hash(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
-        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=flow["api_id"], api_hash=text, status="awaiting_login_phone", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=flow["vertex_deployed_index_id"])
+        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=flow["api_id"], api_hash=text, session_string="", phone_code_hash="", status="awaiting_login_phone", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=flow["vertex_deployed_index_id"])
         self.services.api.send_message(chat_id=chat_id, text="<b>Step 5: Phone Number to Link</b>\nSend the phone number of the account you want to link (+98...):")
 
     def _handle_login_phone(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
@@ -237,6 +233,11 @@ class NotebookBot:
         except Exception as e: self.services.api.send_message(chat_id=chat_id, text=f"Error: {e}")
 
     def _search(self, chat_id: int, query: str, source: str | None) -> None:
+        user = self.services.repository.get_bot_user(bot_user_id=chat_id)
+        if not user or not user.get("vertex_endpoint_id"):
+            self.services.api.send_message(chat_id=chat_id, text="Please /connect first to configure Vertex AI Search.")
+            return
+            
         results = self.services.search_service.search(query=query, channel_url=source, top_k=5)
         if not results: self.services.api.send_message(chat_id=chat_id, text="No results found.")
         else:
@@ -266,7 +267,11 @@ class NotebookBot:
         self.services.api.send_message(chat_id, "Ingesting messages...")
         from .telegram_client import build_client_from_session_string, iter_all_messages, fetch_channel_info
         client = build_client_from_session_string(self.services.settings, user["session_string"], api_id=user.get("api_id"), api_hash=user.get("api_hash"))
-        vertex_config = {"project_id": user["vertex_project_id"], "region": user["vertex_region"], "index_id": user["vertex_index_id"]}
+        vertex_config = {
+            "project_id": user["vertex_project_id"], 
+            "region": user["vertex_region"], 
+            "index_id": user["vertex_index_id"]
+        }
         async def _do():
             async with client:
                 info = await fetch_channel_info(client, link)

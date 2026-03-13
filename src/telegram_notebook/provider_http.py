@@ -48,7 +48,6 @@ def vertex_ai_search(
     query_embedding: list[float],
     top_k: int = 5,
 ) -> list[dict[str, object]]:
-    # آدرس اختصاصی برای جستجوی وکتوری در Vertex AI
     # https://cloud.google.com/vertex-ai/docs/vector-search/query-index-public-endpoint
     url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/indexEndpoints/{index_endpoint_id}:findNeighbors?key={api_key}"
     
@@ -65,12 +64,15 @@ def vertex_ai_search(
     data = _json_request(url=url, payload=payload)
     results = []
     if isinstance(data, dict):
-        nearest_neighbors = data.get("nearestNeighbors", [{}])[0].get("neighbors", [])
-        for n in nearest_neighbors:
-            results.append({
-                "id": n.get("datapoint", {}).get("datapointId"),
-                "distance": n.get("distance")
-            })
+        # Vertex AI returns a list of nearestNeighbors for each query
+        nearest_neighbors_list = data.get("nearestNeighbors", [])
+        if nearest_neighbors_list:
+            neighbors = nearest_neighbors_list[0].get("neighbors", [])
+            for n in neighbors:
+                results.append({
+                    "id": n.get("datapoint", {}).get("datapointId"),
+                    "distance": n.get("distance")
+                })
     return results
 
 
@@ -89,11 +91,7 @@ def vertex_ai_upsert(
         "datapoints": datapoints
     }
     
-    try:
-        _json_request(url=url, payload=payload)
-    except Exception as e:
-        print(f"Vertex AI Upsert Error: {e}")
-        raise
+    _json_request(url=url, payload=payload)
 
 
 def gemini_embed_text(
@@ -104,7 +102,7 @@ def gemini_embed_text(
     task_type: str | None = None,
 ) -> list[float] | None:
     # Vertex AI Embedding API
-    url = f"{GEMINI_BASE_URL}/models/{model}:predict?key={api_key}"
+    url = f"https://us-central1-aiplatform.googleapis.com/v1/publishers/google/models/{model}:predict?key={api_key}"
     payload = {
         "instances": [{"content": text}],
     }
@@ -122,15 +120,13 @@ def gemini_transcribe_audio(
     model: str,
     audio_path: Path,
 ) -> str:
-    # استفاده از مدل جدید و تایید شده کاربر
     if "flash" not in model:
         model = "gemini-2.5-flash-lite"
         
     mime_type = guess_mime_type(audio_path) or "audio/mpeg"
     encoded_audio = base64.b64encode(audio_path.read_bytes()).decode("ascii")
     
-    # دقیقاً مطابق فرمت ارسالی شما
-    url = f"{GEMINI_BASE_URL}/models/{model}:streamGenerateContent?key={api_key}"
+    url = f"https://us-central1-aiplatform.googleapis.com/v1/publishers/google/models/{model}:streamGenerateContent?key={api_key}"
     
     payload = {
         "contents": [
