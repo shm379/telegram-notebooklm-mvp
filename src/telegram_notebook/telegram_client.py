@@ -141,15 +141,67 @@ async def iter_media_messages(
     return list(reversed(results))
 
 
-async def download_message_media(
+async def join_chat(client: Any, link: str) -> str:
+    from telethon.tl.functions.messages import ImportChatInviteRequest
+    from telethon.tl.functions.channels import JoinChannelRequest
+    
+    # تمیز کردن لینک
+    link = link.strip()
+    if "t.me/+" in link or "t.me/joinchat/" in link:
+        # لینک‌های خصوصی (Invite Link)
+        hash_code = link.split("/")[-1].replace("+", "")
+        await client(ImportChatInviteRequest(hash_code))
+        return "با موفقیت به گروه خصوصی وارد شدم."
+    else:
+        # لینک‌های عمومی یا یوزرنیم
+        entity = link.split("/")[-1]
+        await client(JoinChannelRequest(entity))
+        return f"به {entity} پیوستم."
+
+
+async def iter_all_messages(
     client: Any,
     *,
-    media_message: MediaMessage,
-    target_dir: Path,
-) -> Path | None:
-    target_dir.mkdir(parents=True, exist_ok=True)
-    downloaded = await client.download_media(media_message.source_message, file=target_dir)
-    return Path(downloaded) if downloaded else None
+    channel_url: str,
+    limit: int,
+) -> list[MediaMessage]:
+    entity = await client.get_entity(channel_url)
+    username = getattr(entity, "username", None)
+    results: list[MediaMessage] = []
+
+    async for message in client.iter_messages(entity, limit=limit):
+        if not message:
+            continue
+            
+        # اگر فقط متن بود، آن را هم مثل یک آیتم مدیا برای ایندکس شدن در نظر می‌گیریم
+        file_name = getattr(message.file, "name", None) if message.file else None
+        mime_type = getattr(message.file, "mime_type", None) if message.file else None
+        media_kind = detect_media_kind(file_name, mime_type) or "text"
+        
+        message_url = None
+        if username:
+            message_url = f"https://t.me/{username}/{message.id}"
+
+        duration = getattr(getattr(message, "audio", None), "duration", None)
+        if duration is None:
+            duration = getattr(getattr(message, "video", None), "duration", None)
+
+        results.append(
+            MediaMessage(
+                telegram_message_id=int(message.id),
+                message_date=message.date.isoformat() if message.date else None,
+                caption=message.message or "",
+                message_url=message_url,
+                file_name=file_name,
+                mime_type=mime_type,
+                duration_seconds=int(duration) if duration else None,
+                file_size_bytes=getattr(message.file, "size", None) if message.file else None,
+                media_kind=media_kind,
+                source_message=message,
+            )
+        )
+
+    return list(reversed(results))
 
 
 async def request_login_code(

@@ -133,6 +133,14 @@ class NotebookBot:
         if text.startswith("/status"):
             self._send_status(chat_id, bot_user_id)
             return
+        if text.startswith("/join"):
+            link = text.removeprefix("/join").strip()
+            self._handle_join(chat_id, bot_user_id, link)
+            return
+        if text.startswith("/ingest"):
+            link = text.removeprefix("/ingest").strip()
+            self._handle_ingest(chat_id, bot_user_id, link)
+            return
         if text.startswith("/cancel"):
             self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
             self.services.api.send_message(
@@ -402,6 +410,99 @@ class NotebookBot:
             link = f"\n{item.message_url}" if item.message_url else ""
             lines.append(f"- {header}\n{item.chunk_text[:280]}{link}")
         self.services.api.send_message(chat_id=chat_id, text="\n\n".join(lines))
+
+    def _handle_join(self, chat_id: int, bot_user_id: int, link: str) -> None:
+        if not link:
+            self.services.api.send_message(chat_id=chat_id, text="لینک گروه را بفرست: /join https://t.me/...")
+            return
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        if not user or not user.get("session_string"):
+            self.services.api.send_message(chat_id=chat_id, text="ابتدا با /connect متصل شو.")
+            return
+
+        from .telegram_client import build_client_from_session_string, join_chat
+        client = build_client_from_session_string(
+            self.services.settings,
+            user["session_string"],
+            api_id=user.get("api_id"),
+            api_hash=user.get("api_hash")
+        )
+
+        async def _do_join():
+            async with client:
+                return await join_chat(client, link)
+
+        try:
+            msg = asyncio.run(_do_join())
+            self.services.api.send_message(chat_id=chat_id, text=msg)
+        except Exception as exc:
+            self.services.api.send_message(chat_id=chat_id, text=f"خطا در عضویت: {exc}")
+
+    def _handle_ingest(self, chat_id: int, bot_user_id: int, link: str) -> None:
+        if not link:
+            self.services.api.send_message(chat_id=chat_id, text="لینک گروه را بفرست: /ingest https://t.me/...")
+            return
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        if not user or not user.get("session_string"):
+            self.services.api.send_message(chat_id=chat_id, text="ابتدا با /connect متصل شو.")
+            return
+
+        self.services.api.send_message(chat_id=chat_id, text="در حال دریافت و ایندکس کردن پیام‌ها... (کمی زمان می‌برد)")
+        
+        from .telegram_client import build_client_from_session_string, iter_all_messages, fetch_channel_info
+        client = build_client_from_session_string(
+            self.services.settings,
+            user["session_string"],
+            api_id=user.get("api_id"),
+            api_hash=user.get("api_hash")
+        )
+
+        async def _do_ingest():
+            async with client:
+                info = await fetch_channel_info(client, link)
+                channel_id = self.services.repository.upsert_channel(
+                    telegram_id=info.telegram_id,
+                    channel_url=info.canonical_url,
+                    title=info.title,
+                    username=info.username
+                )
+                messages = await iter_all_messages(client, channel_url=info.canonical_url, limit=100)
+                
+                # ارسال به پایپ‌لاین پردازش
+                from .pipeline import IngestionPipeline
+                pipeline = IngestionPipeline(
+                    settings=self.services.settings,
+                    repository=self.services.repository,
+                    transcription=None, # اینجا برای متن نیازی نیست
+                    embeddings=self.services.search_service.embeddings
+                )
+                
+                count = 0
+                for msg in messages:
+                    # ذخیره پیام در دیتابیس
+                    db_msg_id = self.services.repository.create_or_get_message(
+                        channel_id=channel_id,
+                        telegram_message_id=msg.telegram_message_id,
+                        message_date=msg.message_date,
+                        message_url=msg.message_url,
+                        caption=msg.caption
+                    )
+                    
+                    # اگر فقط متن بود، مستقیماً چانک‌بندی و ذخیره کن
+                    if msg.media_kind == "text" and msg.caption:
+                        await pipeline._process_text_message(db_msg_id, msg.caption)
+                        count += 1
+                    elif msg.media_kind in ("audio", "video", "voice"):
+                        # مدیاها را بعداً پردازش کن یا همینجا استارت بزن
+                        pass
+                
+                return f"تعداد {count} پیام متنی ایندکس شد. پردازش مدیاها در پس‌زمینه ادامه دارد."
+
+        try:
+            msg = asyncio.run(_do_ingest())
+            self.services.api.send_message(chat_id=chat_id, text=msg)
+        except Exception as exc:
+            self.services.api.send_message(chat_id=chat_id, text=f"خطا در پردازش: {exc}")
 
 
 def main() -> None:
