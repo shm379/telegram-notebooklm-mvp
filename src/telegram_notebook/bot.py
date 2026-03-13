@@ -88,7 +88,6 @@ class NotebookBot:
             raise RuntimeError("Operation timed out. Please check your connection or try again.")
 
     def handle_update(self, update: dict[str, object]) -> None:
-        # ... (rest of method unchanged)
         callback = update.get("callback_query")
         if isinstance(callback, dict):
             self.services.api.answer_callback_query(callback["id"])
