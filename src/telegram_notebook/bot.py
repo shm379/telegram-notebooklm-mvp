@@ -6,6 +6,7 @@ import time
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 from .bot_api import TelegramBotApi
 from .config import get_settings
@@ -63,6 +64,7 @@ class NotebookBot:
     def __init__(self, services: BotServices) -> None:
         self.services = services
         self.offset: int | None = None
+        self.executor = ThreadPoolExecutor(max_workers=4)
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
 
@@ -79,10 +81,14 @@ class NotebookBot:
                 print(f"bot polling error: {exc}")
                 time.sleep(3)
 
+    def _async_to_sync(self, coro):
+        """اجرای عملیات اسینک در ترد جداگانه برای جلوگیری از فریز شدن"""
+        return self.loop.run_until_complete(coro)
+
     def handle_update(self, update: dict[str, object]) -> None:
         callback = update.get("callback_query")
         if isinstance(callback, dict):
-            self._handle_callback(callback)
+            self.services.api.answer_callback_query(callback["id"])
             return
 
         message = update.get("message")
@@ -125,6 +131,7 @@ class NotebookBot:
             if st == "awaiting_gemini_key": self._handle_gemini_key(chat_id, bot_user_id, text)
             elif st == "awaiting_api_id": self._handle_api_id(chat_id, bot_user_id, text, flow)
             elif st == "awaiting_api_hash": self._handle_api_hash(chat_id, bot_user_id, text, flow)
+            elif st == "awaiting_login_phone": self._handle_login_phone(chat_id, bot_user_id, text, flow)
             elif st == "awaiting_code": self._handle_code(chat_id, bot_user_id, text, flow)
             elif st == "awaiting_password": self._handle_password(chat_id, bot_user_id, text, flow)
 
@@ -133,79 +140,139 @@ class NotebookBot:
 
     def _begin_connect(self, chat_id: int, bot_user_id: int) -> None:
         self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone="", api_id=None, api_hash=None, session_string="", phone_code_hash="", status="awaiting_phone_initial")
-        self.services.api.send_message(chat_id=chat_id, text="۱. اشتراک‌گذاری شماره\nلطفاً دکمه زیر را بزنید:", reply_markup=TelegramBotApi.contact_keyboard())
+        self.services.api.send_message(chat_id=chat_id, text="۱. قدم اول: مشخصات شما\nلطفاً با زدن دکمه زیر شماره خود را جهت ثبت در ربات بفرستید:", reply_markup=TelegramBotApi.contact_keyboard())
 
     def _handle_contact(self, chat_id: int, bot_user_id: int, contact: dict) -> None:
         phone = normalize_phone(str(contact.get("phone_number", "")))
         self.services.repository.save_bot_user_phone(bot_user_id=bot_user_id, phone=phone)
         self.services.repository.update_auth_flow_status(bot_user_id=bot_user_id, status="awaiting_gemini_key")
-        self.services.api.send_message(chat_id=chat_id, text="۲. کلید Vertex AI (Gemini)\nبه لینک زیر بروید و کلید خود را بسازید:\nhttps://aistudio.google.com/app/apikey\nسپس کلید را اینجا بفرستید (شروع با AIza).", reply_markup=TelegramBotApi.remove_keyboard())
+        self.services.api.send_message(chat_id=chat_id, text="۲. قدم دوم: کلید هوش مصنوعی\nبه لینک زیر بروید و کلید Gemini خود را بگیرید:\nhttps://aistudio.google.com/app/apikey\nسپس کلید را اینجا بفرستید (با AIza شروع می‌شود):", reply_markup=TelegramBotApi.remove_keyboard())
 
     def _handle_gemini_key(self, chat_id: int, bot_user_id: int, text: str) -> None:
         if not text.startswith("AIza"):
-            self.services.api.send_message(chat_id=chat_id, text="کلید نامعتبر.")
+            self.services.api.send_message(chat_id=chat_id, text="کلید نامعتبر است.")
             return
         self.services.repository.update_user_gemini_key(bot_user_id=bot_user_id, api_key=text)
         self.services.repository.update_auth_flow_status(bot_user_id=bot_user_id, status="awaiting_api_id")
-        self.services.api.send_message(chat_id=chat_id, text="۳. تنظیمات تلگرام\nبه my.telegram.org بروید و در بخش API Development Tools یک اپ بسازید.\nحالا API_ID را بفرستید.")
+        self.services.api.send_message(chat_id=chat_id, text="۳. قدم سوم: API تلگرام\nبه سایت https://my.telegram.org بروید، لاگین کنید و در بخش API Development Tools یک اپلیکیشن بسازید.\nحالا API_ID را بفرستید:")
 
     def _handle_api_id(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
         if not text.isdigit(): return
         self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=int(text), api_hash=None, session_string="", phone_code_hash="", status="awaiting_api_hash")
-        self.services.api.send_message(chat_id=chat_id, text="حالا API_HASH را بفرستید.")
+        self.services.api.send_message(chat_id=chat_id, text="حالا API_HASH را بفرستید:")
 
     def _handle_api_hash(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
-        self.services.api.send_message(chat_id=chat_id, text="در حال درخواست کد... (صبر کنید)")
+        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=flow["api_id"], api_hash=text, session_string="", phone_code_hash="", status="awaiting_login_phone")
+        self.services.api.send_message(chat_id=chat_id, text="۴. شماره موبایل برای اتصال\nحالا شماره موبایل اکانتی که می‌خواهید متصل شود را با فرمت بین‌المللی بفرستید (مثلاً +989123456789):")
+
+    def _handle_login_phone(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
+        phone = normalize_phone(text)
+        if not phone:
+            self.services.api.send_message(chat_id=chat_id, text="فرمت شماره اشتباه است. دوباره بفرستید:")
+            return
+        
+        self.services.api.send_message(chat_id=chat_id, text="در حال درخواست کد تایید از تلگرام... (لطفاً منتظر بمانید)")
+        
         try:
-            res = self.loop.run_until_complete(request_login_code(self.services.settings, flow["phone"], api_id=flow["api_id"], api_hash=text))
-            self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=flow["api_id"], api_hash=text, session_string=res["session_string"], phone_code_hash=res["phone_code_hash"], status="awaiting_code")
-            self.services.api.send_message(chat_id=chat_id, text="کد تلگرام ارسال شد. آن را وارد کنید.")
+            # اجرای درخواست کد بدون بلاک کردن ربات
+            res = self._async_to_sync(request_login_code(self.services.settings, phone, api_id=flow["api_id"], api_hash=flow["api_hash"]))
+            
+            self.services.repository.upsert_auth_flow(
+                bot_user_id=bot_user_id, chat_id=chat_id, phone=phone,
+                api_id=flow["api_id"], api_hash=flow["api_hash"],
+                session_string=res["session_string"], phone_code_hash=res["phone_code_hash"],
+                status="awaiting_code"
+            )
+            self.services.api.send_message(chat_id=chat_id, text="کد تایید به تلگرام یا پیامک شما ارسال شد. آن را اینجا وارد کنید:")
         except Exception as e:
-            self.services.api.send_message(chat_id=chat_id, text=f"خطا: {e}")
+            self.services.api.send_message(chat_id=chat_id, text=f"خطا در ارسال کد: {e}\nاحتمالاً API_ID یا API_HASH اشتباه است.")
 
     def _handle_code(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
         code = normalize_code(text)
         try:
-            res = self.loop.run_until_complete(sign_in_with_code(self.services.settings, phone=flow["phone"], session_string=flow["session_string"], code=code, phone_code_hash=flow["phone_code_hash"], api_id=flow["api_id"], api_hash=flow["api_hash"]))
+            res = self._async_to_sync(sign_in_with_code(
+                self.services.settings, phone=flow["phone"], session_string=flow["session_string"],
+                code=code, phone_code_hash=flow["phone_code_hash"],
+                api_id=flow["api_id"], api_hash=flow["api_hash"]
+            ))
+            
             if res["status"] == "password_required":
                 self.services.repository.update_auth_flow_status(bot_user_id=bot_user_id, status="awaiting_password")
-                self.services.api.send_message(chat_id=chat_id, text="رمز دو مرحله‌ای را وارد کنید.")
+                self.services.api.send_message(chat_id=chat_id, text="این اکانت تایید دو مرحله‌ای دارد. رمز عبور خود را وارد کنید:")
                 return
-            self.services.repository.save_bot_user_session(bot_user_id=bot_user_id, phone=flow["phone"], api_id=flow["api_id"], api_hash=flow["api_hash"], session_string=res["session_string"], connected_at=res["connected_at"])
+
+            self.services.repository.save_bot_user_session(
+                bot_user_id=bot_user_id, phone=flow["phone"], api_id=flow["api_id"], api_hash=flow["api_hash"],
+                session_string=res["session_string"], connected_at=res["connected_at"]
+            )
             self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
-            self.services.api.send_message(chat_id=chat_id, text="متصل شد! 🎉")
-        except Exception as e: self.services.api.send_message(chat_id=chat_id, text=f"خطا: {e}")
+            self.services.api.send_message(chat_id=chat_id, text="تبریک! اکانت شما با موفقیت متصل شد. 🎉")
+        except Exception as e:
+            self.services.api.send_message(chat_id=chat_id, text=f"خطا در تایید کد: {e}")
+
+    def _handle_password(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
+        try:
+            res = self._async_to_sync(sign_in_with_password(
+                self.services.settings, session_string=flow["session_string"], password=text,
+                api_id=flow["api_id"], api_hash=flow["api_hash"]
+            ))
+            self.services.repository.save_bot_user_session(
+                bot_user_id=bot_user_id, phone=flow["phone"], api_id=flow["api_id"], api_hash=flow["api_hash"],
+                session_string=res["session_string"], connected_at=res["connected_at"]
+            )
+            self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
+            self.services.api.send_message(chat_id=chat_id, text="اکانت با موفقیت متصل شد!")
+        except Exception as e:
+            self.services.api.send_message(chat_id=chat_id, text=f"رمز عبور اشتباه است: {e}")
 
     def _search(self, chat_id: int, query: str, source: str | None) -> None:
+        if not query:
+            self.services.api.send_message(chat_id, "عبارت جست‌وجو را بنویسید.")
+            return
         results = self.services.search_service.search(query=query, channel_url=source, top_k=5)
         if not results:
-            self.services.api.send_message(chat_id=chat_id, text="نتیجه‌ای یافت نشد.")
+            self.services.api.send_message(chat_id, "نتیجه‌ای یافت نشد.")
             return
         resp = [f"📍 {r.channel_title or 'منبع'}\n{r.chunk_text[:300]}\n🔗 {r.message_url or ''}" for r in results]
         self.services.api.send_message(chat_id=chat_id, text="\n\n".join(resp))
 
     def _handle_sources(self, chat_id: int) -> None:
         ch = self.services.repository.list_channels()
-        if not ch: self.services.api.send_message(chat_id, "منبعی نیست."); return
+        if not ch:
+            self.services.api.send_message(chat_id, "منبعی ایندکس نشده است.")
+            return
         self.services.api.send_message(chat_id, "\n".join([f"📚 {c.get('channel_title') or 'بدون نام'}: {c['channel_url']}" for c in ch]))
 
     def _handle_delete(self, chat_id: int, link: str) -> None:
-        if self.services.repository.delete_channel_data(channel_url=link): self.services.api.send_message(chat_id, "پاک شد.")
-        else: self.services.api.send_message(chat_id, "یافت نشد.")
+        if self.services.repository.delete_channel_data(channel_url=link):
+            self.services.api.send_message(chat_id, "منبع و تمامی پیام‌های آن پاک شد.")
+        else:
+            self.services.api.send_message(chat_id, "منبع یافت نشد.")
 
     def _handle_join(self, chat_id: int, bot_user_id: int, link: str) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        if not user or not user.get("session_string"):
+            self.services.api.send_message(chat_id, "ابتدا اکانت خود را متصل کنید. /connect")
+            return
         from .telegram_client import build_client_from_session_string, join_chat
         client = build_client_from_session_string(self.services.settings, user["session_string"], api_id=user.get("api_id"), api_hash=user.get("api_hash"))
         async def _do():
             async with client: return await join_chat(client, link)
-        try: self.services.api.send_message(chat_id, self.loop.run_until_complete(_do()))
-        except Exception as e: self.services.api.send_message(chat_id, f"خطا: {e}")
+        try:
+            res = self._async_to_sync(_do())
+            self.services.api.send_message(chat_id, res)
+        except Exception as e:
+            self.services.api.send_message(chat_id, f"خطا در عضویت: {e}")
 
     def _handle_ingest(self, chat_id: int, bot_user_id: int, link: str) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        if not user or not user.get("session_string"):
+            self.services.api.send_message(chat_id, "ابتدا /connect")
+            return
+        self.services.api.send_message(chat_id, "شروع فرآیند دریافت پیام‌ها...")
         from .telegram_client import build_client_from_session_string, iter_all_messages, fetch_channel_info
         client = build_client_from_session_string(self.services.settings, user["session_string"], api_id=user.get("api_id"), api_hash=user.get("api_hash"))
+        
         async def _do():
             async with client:
                 info = await fetch_channel_info(client, link)
@@ -220,12 +287,15 @@ class NotebookBot:
                     mid = self.services.repository.create_or_get_message(channel_id=channel_id, telegram_message_id=msg.telegram_message_id, message_date=msg.message_date, message_url=msg.message_url, caption=msg.caption)
                     if msg.media_kind == "text" and msg.caption:
                         await pipeline._process_text_message(mid, msg.caption); count += 1
-                return f"تعداد {count} پیام ایندکس شد."
-        try: self.services.api.send_message(chat_id, self.loop.run_until_complete(_do()))
-        except Exception as e: self.services.api.send_message(chat_id, f"خطا: {e}")
+                return f"تعداد {count} پیام با موفقیت ایندکس شد."
+        
+        try:
+            self.services.api.send_message(chat_id, self._async_to_sync(_do()))
+        except Exception as e:
+            self.services.api.send_message(chat_id, f"خطا در دریافت پیام‌ها: {e}")
 
     def _handle_callback(self, callback: dict) -> None:
-        self.services.api.answer_callback_query(callback["id"])
+        pass
 
 def main() -> None:
     bot = NotebookBot(build_services())
