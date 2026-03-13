@@ -142,7 +142,11 @@ class NotebookBot:
         self.services.api.send_message(chat_id=chat_id, text="Welcome! I'm your AI Research Assistant.\nUse /connect to link your account.")
 
     def _begin_connect(self, chat_id: int, bot_user_id: int) -> None:
-        self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone="", status="awaiting_phone_initial")
+        self.services.repository.upsert_auth_flow(
+            bot_user_id=bot_user_id, chat_id=chat_id, phone="", 
+            api_id=None, api_hash=None, session_string="", phone_code_hash="",
+            status="awaiting_phone_initial"
+        )
         self.services.api.send_message(chat_id=chat_id, text="<b>Step 1: Your Profile</b>\nPlease share your phone number to register in the system:", reply_markup=TelegramBotApi.contact_keyboard())
 
     def _handle_contact(self, chat_id: int, bot_user_id: int, contact: dict) -> None:
