@@ -271,27 +271,35 @@ async def sign_in_with_code(
 ) -> dict[str, str]:
     from telethon.errors import SessionPasswordNeededError
 
+    print(f"DEBUG: Signing in with code for {phone}...")
     client = build_client_from_session_string(
         settings, session_string, api_id=api_id, api_hash=api_hash
     )
-    async with client:
+    try:
         await client.connect()
-        try:
-            await client.sign_in(
-                phone=phone,
-                code=code,
-                phone_code_hash=phone_code_hash,
-            )
-        except SessionPasswordNeededError:
-            return {
-                "status": "password_required",
-                "session_string": client.session.save(),
-            }
+        print("DEBUG: Connected to Telegram for sign-in.")
+        await client.sign_in(
+            phone=phone,
+            code=code,
+            phone_code_hash=phone_code_hash,
+        )
+        print("DEBUG: Sign-in successful!")
         return {
             "status": "authorized",
             "session_string": client.session.save(),
             "connected_at": datetime.now(timezone.utc).isoformat(),
         }
+    except SessionPasswordNeededError:
+        print("DEBUG: 2FA Password required.")
+        return {
+            "status": "password_required",
+            "session_string": client.session.save(),
+        }
+    except Exception as e:
+        print(f"DEBUG ERROR during sign-in: {e}")
+        raise
+    finally:
+        await client.disconnect()
 
 
 async def sign_in_with_password(
@@ -302,14 +310,21 @@ async def sign_in_with_password(
     api_id: int | None = None,
     api_hash: str | None = None,
 ) -> dict[str, str]:
+    print("DEBUG: Signing in with 2FA password...")
     client = build_client_from_session_string(
         settings, session_string, api_id=api_id, api_hash=api_hash
     )
-    async with client:
+    try:
         await client.connect()
         await client.sign_in(password=password)
+        print("DEBUG: 2FA Sign-in successful!")
         return {
             "status": "authorized",
             "session_string": client.session.save(),
             "connected_at": datetime.now(timezone.utc).isoformat(),
         }
+    except Exception as e:
+        print(f"DEBUG ERROR during password sign-in: {e}")
+        raise
+    finally:
+        await client.disconnect()
