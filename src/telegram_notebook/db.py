@@ -375,10 +375,20 @@ class Repository:
                 "connected_at": None,
                 "preferred_transcription_model": "gemini-2.0-flash-lite",
                 "preferred_embedding_model": "text-embedding-004",
+                "gemini_api_key": None,
             }
             data["bot_users"].append(record)
             self._save(data)
             return dict(record)
+
+    def update_user_gemini_key(self, *, bot_user_id: int, api_key: str) -> None:
+        with self.lock:
+            data = self._load()
+            for user in data["bot_users"]:
+                if int(user["bot_user_id"]) == bot_user_id:
+                    user["gemini_api_key"] = api_key
+                    break
+            self._save(data)
 
     def update_user_models(self, *, bot_user_id: int, transcription_model: str | None = None, embedding_model: str | None = None) -> None:
         with self.lock:
