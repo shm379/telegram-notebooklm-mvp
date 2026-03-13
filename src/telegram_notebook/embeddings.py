@@ -27,9 +27,10 @@ class EmbeddingService:
                 self.client = OpenAI(api_key=self.api_key)
         return self.client
 
-    def embed(self, text: str, *, task_type: str | None = None) -> list[float] | None:
-        if not self.api_key:
-            return None
+    def embed(self, text: str, *, task_type: str | None = None, project_id: str | None = None, region: str = "us-central1") -> list[float] | None:
+        if not self.api_key and not project_id:
+            # If no API key, we might be using gcloud auth which needs project_id
+            pass
 
         if self.provider == "gemini":
             return gemini_embed_text(
@@ -37,6 +38,8 @@ class EmbeddingService:
                 model=self.model,
                 text=text,
                 task_type=task_type,
+                project_id=project_id,
+                region=region
             )
 
         client = self._get_client()

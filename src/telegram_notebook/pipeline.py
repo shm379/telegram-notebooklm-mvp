@@ -116,7 +116,9 @@ class IngestionPipeline:
         from .provider_http import vertex_ai_upsert
         
         for i, chunk in enumerate(chunks):
-            embedding = self.embeddings.embed(chunk.text, task_type="RETRIEVAL_DOCUMENT")
+            v_proj = vertex_config.get("project_id") if vertex_config else None
+            v_reg = vertex_config.get("region", "us-central1") if vertex_config else "us-central1"
+            embedding = self.embeddings.embed(chunk.text, task_type="RETRIEVAL_DOCUMENT", project_id=v_proj, region=v_reg)
             if embedding:
                 chunk_id = f"c_{media_item_id}_{i}"
                 datapoints.append({

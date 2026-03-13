@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import ssl
+import subprocess
 from pathlib import Path
 from urllib import parse, request
 
@@ -14,16 +15,37 @@ from .media import guess_mime_type
 GEMINI_BASE_URL = "https://aiplatform.googleapis.com/v1/publishers/google"
 
 
+def get_gcloud_access_token() -> str | None:
+    try:
+        result = subprocess.run(
+            ["gcloud", "auth", "print-access-token"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return result.stdout.strip()
+    except Exception as e:
+        print(f"Error getting gcloud access token: {e}")
+        return None
+
+
 def _json_request(
     *,
     url: str,
     payload: dict[str, object] | None = None,
     headers: dict[str, str] | None = None,
+    use_gcloud_auth: bool = False,
 ) -> dict[str, object] | list[dict[str, object]]:
     raw = None
     req_headers = {"Content-Type": "application/json"}
     if headers:
         req_headers.update(headers)
+    
+    if use_gcloud_auth:
+        token = get_gcloud_access_token()
+        if token:
+            req_headers["Authorization"] = f"Bearer {token}"
+            
     if payload is not None:
         raw = json.dumps(payload).encode("utf-8")
     
@@ -40,7 +62,7 @@ def _json_request(
 
 def vertex_ai_search(
     *,
-    api_key: str,
+    api_key: str | None = None,
     project_id: str,
     region: str,
     index_endpoint_id: str,
@@ -49,7 +71,12 @@ def vertex_ai_search(
     top_k: int = 5,
 ) -> list[dict[str, object]]:
     # https://cloud.google.com/vertex-ai/docs/vector-search/query-index-public-endpoint
-    url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/indexEndpoints/{index_endpoint_id}:findNeighbors?key={api_key}"
+    if api_key:
+        url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/indexEndpoints/{index_endpoint_id}:findNeighbors?key={api_key}"
+        use_gcloud = False
+    else:
+        url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/indexEndpoints/{index_endpoint_id}:findNeighbors"
+        use_gcloud = True
     
     payload = {
         "deployed_index_id": deployed_index_id,
@@ -61,7 +88,7 @@ def vertex_ai_search(
         ]
     }
     
-    data = _json_request(url=url, payload=payload)
+    data = _json_request(url=url, payload=payload, use_gcloud_auth=use_gcloud)
     results = []
     if isinstance(data, dict):
         # Vertex AI returns a list of nearestNeighbors for each query
@@ -78,35 +105,48 @@ def vertex_ai_search(
 
 def vertex_ai_upsert(
     *,
-    api_key: str,
+    api_key: str | None = None,
     project_id: str,
     region: str,
     index_id: str,
     datapoints: list[dict[str, object]],
 ) -> None:
     # https://cloud.google.com/vertex-ai/docs/vector-search/upsert-datapoints
-    url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/indexes/{index_id}:upsertDatapoints?key={api_key}"
+    if api_key:
+        url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/indexes/{index_id}:upsertDatapoints?key={api_key}"
+        use_gcloud = False
+    else:
+        url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/indexes/{index_id}:upsertDatapoints"
+        use_gcloud = True
     
     payload = {
         "datapoints": datapoints
     }
     
-    _json_request(url=url, payload=payload)
+    _json_request(url=url, payload=payload, use_gcloud_auth=use_gcloud)
 
 
 def gemini_embed_text(
     *,
-    api_key: str,
+    api_key: str | None = None,
     model: str,
     text: str,
     task_type: str | None = None,
+    project_id: str | None = None,
+    region: str = "us-central1",
 ) -> list[float] | None:
     # Vertex AI Embedding API
-    url = f"https://us-central1-aiplatform.googleapis.com/v1/publishers/google/models/{model}:predict?key={api_key}"
+    if api_key:
+        url = f"https://{region}-aiplatform.googleapis.com/v1/publishers/google/models/{model}:predict?key={api_key}"
+        use_gcloud = False
+    else:
+        url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:predict"
+        use_gcloud = True
+        
     payload = {
         "instances": [{"content": text}],
     }
-    data = _json_request(url=url, payload=payload)
+    data = _json_request(url=url, payload=payload, use_gcloud_auth=use_gcloud)
     if isinstance(data, dict):
         predictions = data.get("predictions", [])
         if predictions:
@@ -116,9 +156,11 @@ def gemini_embed_text(
 
 def gemini_transcribe_audio(
     *,
-    api_key: str,
+    api_key: str | None = None,
     model: str,
     audio_path: Path,
+    project_id: str | None = None,
+    region: str = "us-central1",
 ) -> str:
     if "flash" not in model:
         model = "gemini-2.5-flash-lite"
@@ -126,7 +168,12 @@ def gemini_transcribe_audio(
     mime_type = guess_mime_type(audio_path) or "audio/mpeg"
     encoded_audio = base64.b64encode(audio_path.read_bytes()).decode("ascii")
     
-    url = f"https://us-central1-aiplatform.googleapis.com/v1/publishers/google/models/{model}:streamGenerateContent?key={api_key}"
+    if api_key:
+        url = f"https://{region}-aiplatform.googleapis.com/v1/publishers/google/models/{model}:streamGenerateContent?key={api_key}"
+        use_gcloud = False
+    else:
+        url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:streamGenerateContent"
+        use_gcloud = True
     
     payload = {
         "contents": [
@@ -145,19 +192,23 @@ def gemini_transcribe_audio(
         ]
     }
     
-    data = _json_request(url=url, payload=payload)
+    data = _json_request(url=url, payload=payload, use_gcloud_auth=use_gcloud)
     
     full_text = []
     if isinstance(data, list):
         for chunk in data:
-            parts = chunk.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            candidates = chunk.get("candidates", [])
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                for p in parts:
+                    if "text" in p:
+                        full_text.append(p["text"])
+    elif isinstance(data, dict):
+        candidates = data.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
             for p in parts:
                 if "text" in p:
                     full_text.append(p["text"])
-    elif isinstance(data, dict):
-        parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-        for p in parts:
-            if "text" in p:
-                full_text.append(p["text"])
                 
     return "".join(full_text).strip()

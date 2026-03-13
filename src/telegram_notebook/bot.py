@@ -81,10 +81,14 @@ class NotebookBot:
                 print(f"bot polling error: {exc}")
                 time.sleep(3)
 
-    def _async_to_sync(self, coro):
-        return self.loop.run_until_complete(coro)
+    def _async_to_sync(self, coro, timeout: int = 60):
+        try:
+            return self.loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout))
+        except asyncio.TimeoutError:
+            raise RuntimeError("Operation timed out. Please check your connection or try again.")
 
     def handle_update(self, update: dict[str, object]) -> None:
+        # ... (rest of method unchanged)
         callback = update.get("callback_query")
         if isinstance(callback, dict):
             self.services.api.answer_callback_query(callback["id"])
@@ -203,26 +207,36 @@ class NotebookBot:
 
     def _handle_login_phone(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
         phone = normalize_phone(text)
-        if not phone: return
-        self.services.api.send_message(chat_id=chat_id, text="Requesting code... (Please wait)")
+        if not phone:
+            self.services.api.send_message(chat_id=chat_id, text="Invalid phone number.")
+            return
+        self.services.api.send_message(chat_id=chat_id, text="Requesting code from Telegram... (Please wait up to 1 minute)")
         try:
-            res = self._async_to_sync(request_login_code(self.services.settings, phone, api_id=flow["api_id"], api_hash=flow["api_hash"]))
+            res = self._async_to_sync(request_login_code(self.services.settings, phone, api_id=flow["api_id"], api_hash=flow["api_hash"]), timeout=120)
             self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=phone, api_id=flow["api_id"], api_hash=flow["api_hash"], session_string=res["session_string"], phone_code_hash=res["phone_code_hash"], status="awaiting_code", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=flow["vertex_deployed_index_id"])
             self.services.api.send_message(chat_id=chat_id, text="Code sent to your Telegram. Enter it here:")
-        except Exception as e: self.services.api.send_message(chat_id=chat_id, text=f"Error: {e}")
+        except Exception as e:
+            print(f"Auth Error: {e}")
+            self.services.api.send_message(chat_id=chat_id, text=f"Error: {e}")
 
     def _handle_code(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
         code = normalize_code(text)
+        if not code:
+            self.services.api.send_message(chat_id=chat_id, text="Invalid code format. Please try again.")
+            return
+        self.services.api.send_message(chat_id=chat_id, text="Verifying code with Telegram...")
         try:
-            res = self._async_to_sync(sign_in_with_code(self.services.settings, phone=flow["phone"], session_string=flow["session_string"], code=code, phone_code_hash=flow["phone_code_hash"], api_id=flow["api_id"], api_hash=flow["api_hash"]))
+            res = self._async_to_sync(sign_in_with_code(self.services.settings, phone=flow["phone"], session_string=flow["session_string"], code=code, phone_code_hash=flow["phone_code_hash"], api_id=flow["api_id"], api_hash=flow["api_hash"]), timeout=60)
             if res["status"] == "password_required":
                 self.services.repository.update_auth_flow_status(bot_user_id=bot_user_id, status="awaiting_password")
                 self.services.api.send_message(chat_id=chat_id, text="Two-step verification enabled. Enter your password:")
                 return
             self.services.repository.save_bot_user_session(bot_user_id=bot_user_id, phone=flow["phone"], api_id=flow["api_id"], api_hash=flow["api_hash"], session_string=res["session_string"], connected_at=res["connected_at"], v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=flow["vertex_deployed_index_id"])
             self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
-            self.services.api.send_message(chat_id=chat_id, text="Connected! 🎉")
-        except Exception as e: self.services.api.send_message(chat_id=chat_id, text=f"Error: {e}")
+            self.services.api.send_message(chat_id=chat_id, text="Connected! 🎉 Everything is ready.")
+        except Exception as e:
+            print(f"Code verification error: {e}")
+            self.services.api.send_message(chat_id=chat_id, text=f"Error during sign in: {e}")
 
     def _handle_password(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
         try:
@@ -234,11 +248,24 @@ class NotebookBot:
 
     def _search(self, chat_id: int, query: str, source: str | None) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=chat_id)
-        if not user or not user.get("vertex_endpoint_id"):
-            self.services.api.send_message(chat_id=chat_id, text="Please /connect first to configure Vertex AI Search.")
-            return
+        
+        # Build vertex_config from user data or settings defaults
+        v_project = (user.get("vertex_project_id") if user else None) or self.services.settings.vertex_project_id
+        v_region = (user.get("vertex_region") if user else None) or self.services.settings.vertex_region
+        v_index_endpoint = (user.get("vertex_endpoint_id") if user else None) or self.services.settings.vertex_endpoint_id
+        v_deployed = (user.get("vertex_deployed_index_id") if user else None) or self.services.settings.vertex_deployed_index_id
+        
+        vertex_config = None
+        if v_project and v_region and v_index_endpoint and v_deployed:
+            vertex_config = {
+                "api_key": user.get("gemini_api_key") if user else None,
+                "project_id": v_project,
+                "region": v_region,
+                "index_endpoint_id": v_index_endpoint,
+                "deployed_index_id": v_deployed
+            }
             
-        results = self.services.search_service.search(query=query, channel_url=source, top_k=5)
+        results = self.services.search_service.search(query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
         if not results: self.services.api.send_message(chat_id=chat_id, text="No results found.")
         else:
             resp = [f"📍 {r.channel_title}\n{r.chunk_text[:300]}\n🔗 {r.message_url}" for r in results]
@@ -264,14 +291,27 @@ class NotebookBot:
 
     def _handle_ingest(self, chat_id: int, bot_user_id: int, link: str) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        if not user or not user["session_string"]:
+            self.services.api.send_message(chat_id, "Please /connect first.")
+            return
+
         self.services.api.send_message(chat_id, "Ingesting messages...")
         from .telegram_client import build_client_from_session_string, iter_all_messages, fetch_channel_info
         client = build_client_from_session_string(self.services.settings, user["session_string"], api_id=user.get("api_id"), api_hash=user.get("api_hash"))
-        vertex_config = {
-            "project_id": user["vertex_project_id"], 
-            "region": user["vertex_region"], 
-            "index_id": user["vertex_index_id"]
-        }
+        
+        v_project = user.get("vertex_project_id") or self.services.settings.vertex_project_id
+        v_region = user.get("vertex_region") or self.services.settings.vertex_region
+        v_index_id = user.get("vertex_index_id") or self.services.settings.vertex_index_id
+        
+        vertex_config = None
+        if v_project and v_region and v_index_id:
+            vertex_config = {
+                "api_key": user.get("gemini_api_key") or self.services.settings.gemini_api_key,
+                "project_id": v_project, 
+                "region": v_region, 
+                "index_id": v_index_id
+            }
+
         async def _do():
             async with client:
                 info = await fetch_channel_info(client, link)

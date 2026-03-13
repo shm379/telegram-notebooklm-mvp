@@ -233,7 +233,7 @@ class Repository:
                 conn.commit()
                 return True
 
-    def get_chunk_with_metadata(self, chunk_id: int) -> dict[str, Any] | None:
+    def get_chunk_by_media_and_index(self, media_item_id: int, chunk_index: int) -> dict[str, Any] | None:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -244,8 +244,8 @@ class Repository:
                     JOIN media_items mi ON c.media_item_id = mi.id
                     JOIN messages m ON mi.message_id = m.id
                     JOIN channels ch ON m.channel_id = ch.id
-                    WHERE c.id = ?
-                """, (chunk_id,)).fetchone()
+                    WHERE c.media_item_id = ? AND c.chunk_index = ?
+                """, (media_item_id, chunk_index)).fetchone()
                 return dict(row) if row else None
 
     def upsert_bot_user(

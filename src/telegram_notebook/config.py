@@ -38,6 +38,14 @@ class Settings:
     telegram_bot_token: str | None
     openai_api_key: str | None
     gemini_api_key: str | None
+    vertex_project_id: str | None
+    vertex_region: str | None
+    vertex_index_id: str | None
+    vertex_endpoint_id: str | None
+    vertex_deployed_index_id: str | None
+    telegram_proxy_host: str | None
+    telegram_proxy_port: int | None
+    telegram_proxy_type: str | None # 'http', 'socks5', 'mtproto'
     transcription_provider: str
     transcription_model: str
     embedding_provider: str
@@ -68,6 +76,14 @@ def get_settings() -> Settings:
         telegram_bot_token=_str_env("TELEGRAM_BOT_TOKEN"),
         openai_api_key=_str_env("OPENAI_API_KEY"),
         gemini_api_key=_str_env("GEMINI_API_KEY"),
+        vertex_project_id=_str_env("VERTEX_PROJECT_ID"),
+        vertex_region=_str_env("VERTEX_REGION", "us-central1") or "us-central1",
+        vertex_index_id=_str_env("VERTEX_INDEX_ID"),
+        vertex_endpoint_id=_str_env("VERTEX_ENDPOINT_ID"),
+        vertex_deployed_index_id=_str_env("VERTEX_DEPLOYED_INDEX_ID"),
+        telegram_proxy_host=_str_env("TELEGRAM_PROXY_HOST"),
+        telegram_proxy_port=_int_env("TELEGRAM_PROXY_PORT"),
+        telegram_proxy_type=_str_env("TELEGRAM_PROXY_TYPE"),
         transcription_provider=(
             _str_env("TRANSCRIPTION_PROVIDER", "openai") or "openai"
         ).lower(),

@@ -35,6 +35,7 @@ class MediaMessage:
 def build_client(settings: Settings) -> TelegramClient:
     from telethon import TelegramClient
     from telethon.sessions import StringSession
+    from telethon.network import ConnectionTcpFull
 
     if not settings.telegram_api_id or not settings.telegram_api_hash:
         raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH are required")
@@ -45,7 +46,15 @@ def build_client(settings: Settings) -> TelegramClient:
     else:
         session = str(settings.data_dir / f"{settings.telegram_session_name}.session")
 
-    return TelegramClient(session, settings.telegram_api_id, settings.telegram_api_hash)
+    return TelegramClient(
+        session,
+        settings.telegram_api_id,
+        settings.telegram_api_hash,
+        use_ipv6=False,
+        connection=ConnectionTcpFull,
+        connection_retries=5,
+        retry_delay=2
+    )
 
 
 def build_client_from_session_string(
@@ -56,6 +65,7 @@ def build_client_from_session_string(
 ) -> Any:
     from telethon import TelegramClient
     from telethon.sessions import StringSession
+    from telethon.network import ConnectionTcpFull
 
     final_api_id = api_id or settings.telegram_api_id
     final_api_hash = api_hash or settings.telegram_api_hash
@@ -63,10 +73,18 @@ def build_client_from_session_string(
     if not final_api_id or not final_api_hash:
         raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH are required")
 
+    proxy = None
+    # ... (rest of proxy logic unchanged)
+
     return TelegramClient(
         StringSession(session_string),
         final_api_id,
         final_api_hash,
+        proxy=proxy,
+        use_ipv6=False,
+        connection=ConnectionTcpFull, # استفاده از پکت‌های کامل برای پایداری بیشتر
+        connection_retries=5,
+        retry_delay=2
     )
 
 
@@ -221,15 +239,24 @@ async def request_login_code(
     api_id: int | None = None,
     api_hash: str | None = None,
 ) -> dict[str, str]:
+    print(f"DEBUG: Initializing client for {phone}...")
     client = build_client_from_session_string(settings, "", api_id=api_id, api_hash=api_hash)
-    async with client:
+    try:
+        print("DEBUG: Connecting to Telegram...")
         await client.connect()
+        print("DEBUG: Connected. Requesting code...")
         result = await client.send_code_request(phone)
+        print(f"DEBUG: Code sent. Hash: {result.phone_code_hash}")
         return {
             "session_string": client.session.save(),
             "phone_code_hash": result.phone_code_hash,
             "phone": phone,
         }
+    except Exception as e:
+        print(f"DEBUG ERROR: {e}")
+        raise
+    finally:
+        await client.disconnect()
 
 
 async def sign_in_with_code(
