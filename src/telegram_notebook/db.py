@@ -74,7 +74,7 @@ class Repository:
                         api_hash TEXT,
                         session_string TEXT,
                         connected_at TEXT,
-                        preferred_transcription_model TEXT DEFAULT 'gemini-2.0-flash-lite',
+                        preferred_transcription_model TEXT DEFAULT 'gemini-2.5-flash-lite',
                         preferred_embedding_model TEXT DEFAULT 'text-embedding-004',
                         gemini_api_key TEXT,
                         vertex_project_id TEXT,

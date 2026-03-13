@@ -122,9 +122,9 @@ def gemini_transcribe_audio(
     model: str,
     audio_path: Path,
 ) -> str:
-    # استفاده از مدل درخواستی کاربر یا پیش‌فرض ورتکس
+    # استفاده از مدل جدید و تایید شده کاربر
     if "flash" not in model:
-        model = "gemini-2.0-flash-lite"
+        model = "gemini-2.5-flash-lite"
         
     mime_type = guess_mime_type(audio_path) or "audio/mpeg"
     encoded_audio = base64.b64encode(audio_path.read_bytes()).decode("ascii")
