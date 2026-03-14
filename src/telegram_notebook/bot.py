@@ -123,6 +123,13 @@ class NotebookBot:
                 parts = query.split(" --source ")
                 query, source = parts[0].strip(), parts[1].strip()
             self._search(chat_id, query, source)
+        elif text.startswith("/ask"):
+            query = text.removeprefix("/ask").strip()
+            source = None
+            if " --source " in query:
+                parts = query.split(" --source ")
+                query, source = parts[0].strip(), parts[1].strip()
+            self._ask_brain(chat_id, query, source)
         elif text.startswith("/join"): self._handle_join(chat_id, bot_user_id, text.removeprefix("/join").strip())
         elif text.startswith("/ingest"): self._handle_ingest(chat_id, bot_user_id, text.removeprefix("/ingest").strip())
         elif text.startswith("/sources"): self._handle_sources(chat_id)
@@ -270,6 +277,47 @@ class NotebookBot:
         else:
             resp = [f"📍 {r.channel_title}\n{r.chunk_text[:300]}\n🔗 {r.message_url}" for r in results]
             self.services.api.send_message(chat_id=chat_id, text="\n\n".join(resp))
+
+    def _ask_brain(self, chat_id: int, query: str, source: str | None) -> None:
+        user = self.services.repository.get_bot_user(bot_user_id=chat_id)
+        
+        # Build vertex_config/gemini_key
+        gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
+        v_project = (user.get("vertex_project_id") if user else None) or self.services.settings.vertex_project_id
+        v_region = (user.get("vertex_region") if user else None) or self.services.settings.vertex_region
+        v_index_endpoint = (user.get("vertex_endpoint_id") if user else None) or self.services.settings.vertex_endpoint_id
+        v_deployed = (user.get("vertex_deployed_index_id") if user else None) or self.services.settings.vertex_deployed_index_id
+        
+        vertex_config = None
+        if v_project and v_region and v_index_endpoint and v_deployed:
+            vertex_config = {
+                "api_key": gemini_api_key,
+                "project_id": v_project,
+                "region": v_region,
+                "index_endpoint_id": v_index_endpoint,
+                "deployed_index_id": v_deployed
+            }
+        
+        self.services.api.send_message(chat_id=chat_id, text="🧠 AI Brain is thinking...")
+        
+        # 1. Search
+        results = self.services.search_service.search(query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
+        
+        # 2. RAG Answer
+        answer = self.services.search_service.generate_answer(
+            query=query,
+            results=results,
+            api_key=gemini_api_key,
+            project_id=v_project,
+            region=v_region
+        )
+        
+        # 3. Response
+        self.services.api.send_message(chat_id=chat_id, text=f"💡 **AI Answer:**\n\n{answer}")
+        
+        if results:
+            sources_text = "\n".join([f"• {r.channel_title or r.channel_url} ({r.message_url})" for r in results[:3]])
+            self.services.api.send_message(chat_id=chat_id, text=f"📚 **Sources:**\n{sources_text}", disable_web_page_preview=True)
 
     def _handle_sources(self, chat_id: int) -> None:
         ch = self.services.repository.list_channels()
