@@ -56,7 +56,8 @@ def normalize_phone(raw: str) -> str | None:
 
 
 def normalize_code(raw: str) -> str | None:
-    compact = raw.strip().replace(" ", "").replace("-", "")
+    # حذف تمام کاراکترهای غیر عددی مثل نقطه، فاصله و خط‌تیره برای دور زدن فیلتر امنیتی تلگرام
+    compact = raw.strip().replace(" ", "").replace("-", "").replace(".", "")
     return compact if (compact.isdigit() and 3 <= len(compact) <= 12) or CODE_RE.match(raw.strip()) else None
 
 
