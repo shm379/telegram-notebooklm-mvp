@@ -276,21 +276,31 @@ INDEX_HTML = """
         </div>
 
         <div class="card">
-          <h2>Search</h2>
-          <label for="query">Query</label>
+          <h2>Search & Ask</h2>
+          <label for="query">Query / Question</label>
           <textarea id="query">هوش مصنوعی و مدل‌های زبانی</textarea>
           <label for="searchChannel">Optional channel filter</label>
           <input id="searchChannel" placeholder="https://t.me/example_channel" />
-          <button class="secondary" id="searchBtn">Search Transcript</button>
+          <div style="display:flex; gap:10px;">
+            <button class="secondary" id="searchBtn">Search Transcript</button>
+            <button id="askBtn">Ask AI Brain</button>
+          </div>
           <div class="status" id="searchStatus"></div>
         </div>
       </section>
+
+      <div id="brainAnswer" style="display:none; margin-top:20px;" class="card">
+        <h3>AI Brain Response</h3>
+        <p id="answerText" style="white-space: pre-wrap; color: var(--ink);"></p>
+        <div class="tiny" id="answerMeta"></div>
+      </div>
 
       <section class="results" id="results"></section>
     </div>
     <script>
       const ingestBtn = document.getElementById("ingestBtn");
       const searchBtn = document.getElementById("searchBtn");
+      const askBtn = document.getElementById("askBtn");
       const reloadModelsBtn = document.getElementById("reloadModelsBtn");
       const saveSettingsBtn = document.getElementById("saveSettingsBtn");
       const ingestStatus = document.getElementById("ingestStatus");
@@ -298,6 +308,26 @@ INDEX_HTML = """
       const settingsStatus = document.getElementById("settingsStatus");
       const settingsSummary = document.getElementById("settingsSummary");
       const results = document.getElementById("results");
+      const brainAnswer = document.getElementById("brainAnswer");
+      const answerText = document.getElementById("answerText");
+
+      function displayResults(dataItems) {
+        results.innerHTML = "";
+        for (const item of dataItems) {
+          const div = document.createElement("article");
+          div.className = "result";
+          div.innerHTML = `
+            <div class="meta">
+              <strong>${item.channel_title || item.channel_url}</strong>
+              • ${item.media_kind}
+              • score=${item.score}
+              ${item.message_url ? `• <a href="${item.message_url}" target="_blank" rel="noreferrer">post</a>` : ""}
+            </div>
+            <div>${item.chunk_text}</div>
+          `;
+          results.appendChild(div);
+        }
+      }
 
       const transcriptionProvider = document.getElementById("transcriptionProvider");
       const transcriptionModel = document.getElementById("transcriptionModel");
@@ -410,6 +440,7 @@ INDEX_HTML = """
       searchBtn.addEventListener("click", async () => {
         searchStatus.textContent = "در حال جست‌وجو...";
         results.innerHTML = "";
+        brainAnswer.style.display = "none";
         try {
           const data = await fetchJson("/api/search", {
             method: "POST",
@@ -421,20 +452,29 @@ INDEX_HTML = """
             })
           });
           searchStatus.textContent = `${data.results.length} نتیجه پیدا شد`;
-          for (const item of data.results) {
-            const div = document.createElement("article");
-            div.className = "result";
-            div.innerHTML = `
-              <div class="meta">
-                <strong>${item.channel_title || item.channel_url}</strong>
-                • ${item.media_kind}
-                • score=${item.score}
-                ${item.message_url ? `• <a href="${item.message_url}" target="_blank" rel="noreferrer">post</a>` : ""}
-              </div>
-              <div>${item.chunk_text}</div>
-            `;
-            results.appendChild(div);
-          }
+          displayResults(data.results);
+        } catch (error) {
+          searchStatus.textContent = error.message;
+        }
+      });
+
+      askBtn.addEventListener("click", async () => {
+        searchStatus.textContent = "در حال تفکر...";
+        results.innerHTML = "";
+        brainAnswer.style.display = "none";
+        try {
+          const data = await fetchJson("/api/ask", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              query: document.getElementById("query").value,
+              channel_url: document.getElementById("searchChannel").value || null,
+            })
+          });
+          searchStatus.textContent = "پاسخ آماده شد!";
+          brainAnswer.style.display = "block";
+          answerText.textContent = data.answer;
+          displayResults(data.sources);
         } catch (error) {
           searchStatus.textContent = error.message;
         }
@@ -575,6 +615,36 @@ class RequestHandler(BaseHTTPRequestHandler):
                     {
                         "query": query,
                         "results": [result.to_dict() for result in results],
+                    }
+                )
+            except Exception as exc:
+                self._send_json({"detail": str(exc)}, status=400)
+            return
+
+        if parsed.path == "/api/ask":
+            query = str(payload.get("query", "")).strip()
+            channel_url = payload.get("channel_url")
+            if not query:
+                self._send_json({"detail": "query is required"}, status=400)
+                return
+            try:
+                # 1. Search for relevant chunks
+                results = state.search_service.search(
+                    query=query,
+                    channel_url=str(channel_url).strip() if channel_url else None,
+                    top_k=5,
+                )
+                # 2. Generate answer
+                answer = state.search_service.generate_answer(
+                    query=query,
+                    results=results,
+                    api_key=state.settings.gemini_api_key,
+                )
+                self._send_json(
+                    {
+                        "query": query,
+                        "answer": answer,
+                        "sources": [result.to_dict() for result in results],
                     }
                 )
             except Exception as exc:

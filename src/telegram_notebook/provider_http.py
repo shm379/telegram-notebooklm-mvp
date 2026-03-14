@@ -212,3 +212,54 @@ def gemini_transcribe_audio(
                     full_text.append(p["text"])
                 
     return "".join(full_text).strip()
+
+
+def gemini_generate_content(
+    *,
+    api_key: str | None = None,
+    model: str = "gemini-1.5-flash",
+    prompt: str,
+    project_id: str | None = None,
+    region: str = "us-central1",
+) -> str:
+    if api_key:
+        url = f"https://{region}-aiplatform.googleapis.com/v1/publishers/google/models/{model}:streamGenerateContent?key={api_key}"
+        use_gcloud = False
+    else:
+        url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:streamGenerateContent"
+        use_gcloud = True
+    
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "topP": 0.8,
+            "topK": 40,
+        }
+    }
+    
+    data = _json_request(url=url, payload=payload, use_gcloud_auth=use_gcloud)
+    
+    full_text = []
+    if isinstance(data, list):
+        for chunk in data:
+            candidates = chunk.get("candidates", [])
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                for p in parts:
+                    if "text" in p:
+                        full_text.append(p["text"])
+    elif isinstance(data, dict):
+        candidates = data.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            for p in parts:
+                if "text" in p:
+                    full_text.append(p["text"])
+                
+    return "".join(full_text).strip()

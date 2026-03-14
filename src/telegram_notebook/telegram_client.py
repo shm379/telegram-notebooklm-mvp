@@ -65,7 +65,6 @@ def build_client_from_session_string(
 ) -> Any:
     from telethon import TelegramClient
     from telethon.sessions import StringSession
-    from telethon.network import ConnectionTcpFull
 
     final_api_id = api_id or settings.telegram_api_id
     final_api_hash = api_hash or settings.telegram_api_hash
@@ -73,16 +72,11 @@ def build_client_from_session_string(
     if not final_api_id or not final_api_hash:
         raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH are required")
 
-    proxy = None
-    # ... (rest of proxy logic unchanged)
-
     return TelegramClient(
         StringSession(session_string),
         final_api_id,
         final_api_hash,
-        proxy=proxy,
         use_ipv6=False,
-        connection=ConnectionTcpFull, # استفاده از پکت‌های کامل برای پایداری بیشتر
         connection_retries=5,
         retry_delay=2
     )

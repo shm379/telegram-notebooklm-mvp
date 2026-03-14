@@ -5,7 +5,7 @@ from typing import Any
 
 from .db import Repository
 from .embeddings import EmbeddingService
-from .provider_http import vertex_ai_search
+from .provider_http import vertex_ai_search, gemini_generate_content
 from .models import SearchResult
 
 
@@ -13,6 +13,43 @@ class SearchService:
     def __init__(self, repository: Repository, embeddings: EmbeddingService) -> None:
         self.repository = repository
         self.embeddings = embeddings
+
+    def generate_answer(
+        self,
+        *,
+        query: str,
+        results: list[SearchResult],
+        api_key: str | None = None,
+        project_id: str | None = None,
+        region: str = "us-central1",
+    ) -> str:
+        if not results:
+            return "متأسفانه موردی پیدا نشد."
+
+        context_parts = []
+        for i, res in enumerate(results, 1):
+            source = res.channel_title or res.channel_url or "Unknown Source"
+            context_parts.append(f"Source [{i}] ({source}):\n{res.chunk_text}")
+
+        context = "\n\n".join(context_parts)
+        prompt = f"""شما یک دستیار هوشمند هستید که به کاربر در تحلیل محتوای کانال‌های تلگرامی کمک می‌کنید.
+بر اساس اطلاعات زیر که از جست‌وجوی معنایی استخراج شده است، به سوال کاربر پاسخ دقیق و مستند بدهید.
+اگر اطلاعات کافی نیست، بگویید که بر اساس منابع موجود نمی‌توانید پاسخ کاملی بدهید.
+
+اطلاعات استخراج شده:
+{context}
+
+سوال کاربر:
+{query}
+
+پاسخ (به زبان فارسی):"""
+
+        return gemini_generate_content(
+            api_key=api_key,
+            prompt=prompt,
+            project_id=project_id,
+            region=region
+        )
 
     def search(
         self,
