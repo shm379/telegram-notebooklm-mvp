@@ -51,9 +51,13 @@ def build_client(settings: Settings) -> TelegramClient:
         settings.telegram_api_id,
         settings.telegram_api_hash,
         use_ipv6=False,
-        connection=ConnectionTcpFull,
         connection_retries=5,
-        retry_delay=2
+        retry_delay=2,
+        device_model="Samsung Galaxy S23 Ultra",
+        system_version="Android 13.0",
+        app_version="9.6.1",
+        lang_code="en",
+        system_lang_code="en"
     )
 
 
@@ -78,7 +82,12 @@ def build_client_from_session_string(
         final_api_hash,
         use_ipv6=False,
         connection_retries=5,
-        retry_delay=2
+        retry_delay=2,
+        device_model="Samsung Galaxy S23 Ultra",
+        system_version="Android 13.0",
+        app_version="9.6.1",
+        lang_code="en",
+        system_lang_code="en"
     )
 
 
