@@ -50,15 +50,24 @@ def build_services() -> BotServices:
 
 
 def normalize_phone(raw: str) -> str | None:
-    compact = raw.strip().replace(" ", "").replace("-", "")
-    if not PHONE_RE.match(compact): return None
-    return compact if compact.startswith("+") else f"+{compact}"
+    # تبدیل اعداد فارسی/عربی به انگلیسی
+    table = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    text = raw.translate(table)
+    # استخراج فقط اعداد
+    compact = "".join(c for c in text if c.isdigit())
+    if not (10 <= len(compact) <= 15): return None
+    return f"+{compact}" if not text.strip().startswith("+") else f"+{compact}"
 
 
 def normalize_code(raw: str) -> str | None:
-    # حذف تمام کاراکترهای غیر عددی مثل نقطه، فاصله و خط‌تیره برای دور زدن فیلتر امنیتی تلگرام
-    compact = raw.strip().replace(" ", "").replace("-", "").replace(".", "")
-    return compact if (compact.isdigit() and 3 <= len(compact) <= 12) or CODE_RE.match(raw.strip()) else None
+    # تبدیل اعداد فارسی/عربی به انگلیسی
+    table = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    text = raw.translate(table)
+    # استخراج فقط اعداد از کل متن (حتی اگر بین‌شان نقطه یا حرف باشد)
+    compact = "".join(c for c in text if c.isdigit())
+    if 3 <= len(compact) <= 12:
+        return compact
+    return None
 
 
 class NotebookBot:
