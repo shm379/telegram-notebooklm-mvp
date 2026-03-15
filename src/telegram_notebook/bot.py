@@ -247,7 +247,7 @@ class NotebookBot:
     def _handle_code(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
         code = normalize_code(text)
         if not code:
-            self.services.api.send_message(chat_id=chat_id, text="Invalid code format. Please try again.")
+            self.services.api.send_message(chat_id=chat_id, text="Invalid code format (v3). Please try again.")
             return
         self.services.api.send_message(chat_id=chat_id, text="Verifying code with Telegram...")
         try:

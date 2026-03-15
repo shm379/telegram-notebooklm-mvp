@@ -24,5 +24,7 @@ jobs:
             source .venv/bin/activate
             pip install -r requirements.txt
             export PYTHONPATH=$PYTHONPATH:$(pwd)/src
-            pm2 restart tg-notebook || pm2 start "python3 -m telegram_notebook.bot" --name tg-notebook --env PYTHONPATH=$(pwd)/src
+            pm2 delete tg-notebook || true
+            pkill -f "telegram_notebook.bot" || true
+            pm2 start "python3 -m telegram_notebook.bot" --name tg-notebook --env PYTHONPATH=$(pwd)/src
             pm2 save
