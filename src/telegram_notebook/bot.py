@@ -60,11 +60,20 @@ def normalize_phone(raw: str) -> str | None:
 
 
 def normalize_code(raw: str) -> str | None:
-    # تبدیل اعداد فارسی/عربی به انگلیسی
-    table = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-    text = raw.translate(table)
-    # استخراج فقط اعداد از کل متن (حتی اگر بین‌شان نقطه یا حرف باشد)
+    if not raw: return None
+    # تبدیل تمام اعداد فارسی و عربی به انگلیسی
+    persian_digits = "۰۱۲۳۴۵۶۷۸۹"
+    arabic_digits = "٠١٢٣٤٥٦٧٨٩"
+    english_digits = "0123456789"
+    
+    text = raw
+    for i in range(10):
+        text = text.replace(persian_digits[i], english_digits[i])
+        text = text.replace(arabic_digits[i], english_digits[i])
+    
+    # استخراج فقط و فقط اعداد
     compact = "".join(c for c in text if c.isdigit())
+    
     if 3 <= len(compact) <= 12:
         return compact
     return None
