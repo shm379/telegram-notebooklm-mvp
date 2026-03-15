@@ -130,6 +130,7 @@ class NotebookBot:
         if not text: return
 
         if text.startswith("/start"): self._send_welcome(chat_id)
+        elif text.startswith("/version"): self.services.api.send_message(chat_id=chat_id, text="Bot Version: v4.0 (Aggressive Cleanup)")
         elif text.startswith("/connect"): self._begin_connect(chat_id, bot_user_id)
         elif text.startswith("/cancel"):
             self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
@@ -247,7 +248,7 @@ class NotebookBot:
     def _handle_code(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
         code = normalize_code(text)
         if not code:
-            self.services.api.send_message(chat_id=chat_id, text="Invalid code format (v3). Please try again.")
+            self.services.api.send_message(chat_id=chat_id, text="Invalid code format (v4). Please try again.")
             return
         self.services.api.send_message(chat_id=chat_id, text="Verifying code with Telegram...")
         try:
