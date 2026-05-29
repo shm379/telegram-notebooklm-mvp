@@ -60,6 +60,71 @@ def _json_request(
         raise
 
 
+def list_gemini_models(
+    *,
+    api_key: str,
+    capability: str | None = None,
+) -> list[dict[str, object]]:
+    from google import genai
+
+    client = genai.Client(api_key=api_key)
+    output: list[dict[str, object]] = []
+
+    for model in client.models.list():
+        model_id = str(getattr(model, "name", "") or "")
+        if model_id.startswith("models/"):
+            model_id = model_id.split("/", 1)[1]
+        display_name = str(getattr(model, "display_name", "") or model_id)
+        description = str(getattr(model, "description", "") or "")
+        supported_actions = " ".join(str(v) for v in (getattr(model, "supported_actions", None) or []))
+        haystack = f"{model_id} {display_name} {description} {supported_actions}".lower()
+
+        if capability == "generateContent" and "gemini" not in haystack:
+            continue
+        if capability == "embedContent" and "embed" not in haystack:
+            continue
+
+        output.append(
+            {
+                "id": model_id,
+                "display_name": display_name,
+                "provider": "gemini",
+            }
+        )
+
+    return sorted(output, key=lambda item: str(item["id"]))
+
+
+def list_openai_models(
+    *,
+    api_key: str,
+    capability: str | None = None,
+) -> list[dict[str, object]]:
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    output: list[dict[str, object]] = []
+
+    for model in client.models.list():
+        model_id = getattr(model, "id", "")
+        if not model_id:
+            continue
+        lowered = model_id.lower()
+        if capability == "transcription" and "transcribe" not in lowered:
+            continue
+        if capability == "embedding" and "embedding" not in lowered:
+            continue
+        output.append(
+            {
+                "id": model_id,
+                "display_name": model_id,
+                "provider": "openai",
+            }
+        )
+
+    return sorted(output, key=lambda item: str(item["id"]))
+
+
 def vertex_ai_search(
     *,
     api_key: str | None = None,
@@ -135,18 +200,29 @@ def gemini_embed_text(
     project_id: str | None = None,
     region: str = "us-central1",
 ) -> list[float] | None:
-    # Vertex AI Embedding API
     if api_key:
-        url = f"https://{region}-aiplatform.googleapis.com/v1/publishers/google/models/{model}:predict?key={api_key}"
-        use_gcloud = False
-    else:
-        url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:predict"
-        use_gcloud = True
-        
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        config = types.EmbedContentConfig(task_type=task_type) if task_type else None
+        response = client.models.embed_content(
+            model=model,
+            contents=text,
+            config=config,
+        )
+        embeddings = getattr(response, "embeddings", None) or []
+        if embeddings:
+            values = getattr(embeddings[0], "values", None)
+            if values:
+                return list(values)
+        return None
+
+    url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:predict"
     payload = {
         "instances": [{"content": text}],
     }
-    data = _json_request(url=url, payload=payload, use_gcloud_auth=use_gcloud)
+    data = _json_request(url=url, payload=payload, use_gcloud_auth=True)
     if isinstance(data, dict):
         predictions = data.get("predictions", [])
         if predictions:
@@ -164,17 +240,27 @@ def gemini_transcribe_audio(
 ) -> str:
     if "flash" not in model:
         model = "gemini-2.5-flash-lite"
-        
+
     mime_type = guess_mime_type(audio_path) or "audio/mpeg"
-    encoded_audio = base64.b64encode(audio_path.read_bytes()).decode("ascii")
-    
+
     if api_key:
-        url = f"https://{region}-aiplatform.googleapis.com/v1/publishers/google/models/{model}:streamGenerateContent?key={api_key}"
-        use_gcloud = False
-    else:
-        url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:streamGenerateContent"
-        use_gcloud = True
-    
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model,
+            contents=[
+                "Generate a verbatim transcript of the spoken audio. Return only the transcript text.",
+                types.Part.from_bytes(data=audio_path.read_bytes(), mime_type=mime_type),
+            ],
+            config=types.GenerateContentConfig(temperature=0.0),
+        )
+        text = getattr(response, "text", None)
+        return text.strip() if text else ""
+
+    encoded_audio = base64.b64encode(audio_path.read_bytes()).decode("ascii")
+    url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:streamGenerateContent"
     payload = {
         "contents": [
             {
@@ -191,9 +277,9 @@ def gemini_transcribe_audio(
             }
         ]
     }
-    
-    data = _json_request(url=url, payload=payload, use_gcloud_auth=use_gcloud)
-    
+
+    data = _json_request(url=url, payload=payload, use_gcloud_auth=True)
+
     full_text = []
     if isinstance(data, list):
         for chunk in data:
@@ -217,18 +303,29 @@ def gemini_transcribe_audio(
 def gemini_generate_content(
     *,
     api_key: str | None = None,
-    model: str = "gemini-1.5-flash",
+    model: str = "gemini-2.5-flash-lite",
     prompt: str,
     project_id: str | None = None,
     region: str = "us-central1",
 ) -> str:
     if api_key:
-        url = f"https://{region}-aiplatform.googleapis.com/v1/publishers/google/models/{model}:streamGenerateContent?key={api_key}"
-        use_gcloud = False
-    else:
-        url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:streamGenerateContent"
-        use_gcloud = True
-    
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                top_p=0.8,
+                top_k=40,
+            ),
+        )
+        text = getattr(response, "text", None)
+        return text.strip() if text else ""
+
+    url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:streamGenerateContent"
     payload = {
         "contents": [
             {
@@ -242,9 +339,9 @@ def gemini_generate_content(
             "topK": 40,
         }
     }
-    
-    data = _json_request(url=url, payload=payload, use_gcloud_auth=use_gcloud)
-    
+
+    data = _json_request(url=url, payload=payload, use_gcloud_auth=True)
+
     full_text = []
     if isinstance(data, list):
         for chunk in data:

@@ -7,6 +7,53 @@ from pathlib import Path
 from typing import Any
 
 
+def connect(db_path: Path) -> Path:
+    path = Path(db_path)
+    if path.suffix.lower() != ".json":
+        return path
+
+    target = path.with_suffix(".db")
+    if target.exists():
+        return target
+
+    _migrate_json_store(path, target)
+    return target
+
+
+def _migrate_json_store(source: Path, target: Path) -> None:
+    repo = Repository(target)
+    repo.init()
+
+    if not source.exists():
+        return
+
+    raw = source.read_text(encoding="utf-8").strip()
+    if not raw:
+        return
+
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        return
+
+    with sqlite3.connect(target) as conn:
+        for table in ("channels", "messages", "media_items", "chunks", "bot_users", "auth_flows"):
+            rows = data.get(table, [])
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict) or not row:
+                    continue
+                columns = list(row.keys())
+                placeholders = ", ".join("?" for _ in columns)
+                col_sql = ", ".join(columns)
+                values = [json.dumps(v) if isinstance(v, (dict, list)) else v for v in row.values()]
+                conn.execute(
+                    f"INSERT OR REPLACE INTO {table} ({col_sql}) VALUES ({placeholders})",
+                    values,
+                )
+        conn.commit()
+
+
 class Repository:
     def __init__(self, db_path: Path) -> None:
         self.path = db_path
@@ -159,6 +206,16 @@ class Repository:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.execute("UPDATE media_items SET transcript_text = ?, transcript_status = 'done' WHERE id = ?", (transcript_text, media_item_id))
+                conn.commit()
+
+    def mark_media_failed(self, *, media_item_id: int, error: str) -> None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "UPDATE media_items SET transcript_status = 'error', transcript_error = ? WHERE id = ?",
+                    (error, media_item_id),
+                )
+                conn.commit()
 
     def media_already_transcribed(self, media_item_id: int) -> bool:
         with self.lock:

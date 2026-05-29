@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .chunking import split_text
 from .config import Settings
@@ -44,18 +45,21 @@ class IngestionPipeline:
         vertex_config: dict[str, str] | None = None,
     ) -> IngestStats:
         from .telegram_client import (
+            build_client,
             build_client_from_session_string,
             fetch_channel_info,
             iter_all_messages,
-            download_message_media
         )
-        
-        client = build_client_from_session_string(
-            self.settings,
-            session_string or "",
-            api_id=api_id,
-            api_hash=api_hash,
-        )
+
+        if session_string is None:
+            client = build_client(self.settings)
+        else:
+            client = build_client_from_session_string(
+                self.settings,
+                session_string,
+                api_id=api_id,
+                api_hash=api_hash,
+            )
         async with client:
             channel = await fetch_channel_info(client, channel_url)
             channel_id = self.repository.upsert_channel(
@@ -86,6 +90,20 @@ class IngestionPipeline:
                     stats.processed_media += 1
                     continue
 
+                if msg.media_kind in {"audio", "video"}:
+                    processed = await self._process_media_message(
+                        client=client,
+                        channel_url=channel.canonical_url,
+                        message_id=message_id,
+                        media_message=msg,
+                        vertex_config=vertex_config,
+                    )
+                    if processed:
+                        stats.processed_media += 1
+                    else:
+                        stats.skipped_media += 1
+                    continue
+
             return stats
 
     async def _process_text_message(self, message_id: int, text: str, vertex_config: dict | None = None) -> None:
@@ -103,6 +121,54 @@ class IngestionPipeline:
         await self._process_text_data(media_id, text, vertex_config)
         self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=text)
 
+    async def _process_media_message(
+        self,
+        *,
+        client: object,
+        channel_url: str,
+        message_id: int,
+        media_message: object,
+        vertex_config: dict | None = None,
+    ) -> bool:
+        from .telegram_client import download_message_media
+
+        channel_name = self._channel_storage_name(channel_url)
+        download_dir = self.settings.media_dir / channel_name / str(media_message.telegram_message_id)
+        downloaded_path = await download_message_media(
+            client,
+            media_message=media_message,
+            target_dir=download_dir,
+        )
+        if not downloaded_path:
+            return False
+
+        media_id = self.repository.create_or_get_media(
+            message_id=message_id,
+            file_name=media_message.file_name or downloaded_path.name,
+            file_path=str(downloaded_path),
+            mime_type=media_message.mime_type,
+            media_kind=media_message.media_kind,
+            duration_seconds=media_message.duration_seconds,
+            file_size_bytes=media_message.file_size_bytes,
+        )
+        if self.repository.media_already_transcribed(media_id):
+            return True
+
+        transcript_text = ""
+        if self.transcription and self.transcription.enabled:
+            try:
+                transcript_text = self.transcription.transcribe_media(downloaded_path, download_dir)
+            except Exception as exc:
+                self.repository.mark_media_failed(media_item_id=media_id, error=str(exc))
+
+        combined_text = self._combine_text_parts(transcript_text, media_message.caption)
+        if not combined_text:
+            return False
+
+        await self._process_text_data(media_item_id=media_id, text=combined_text, vertex_config=vertex_config)
+        self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=combined_text)
+        return True
+
     async def _process_text_data(self, media_item_id: int, text: str, vertex_config: dict | None = None) -> None:
         chunks = split_text(
             text,
@@ -118,19 +184,28 @@ class IngestionPipeline:
         for i, chunk in enumerate(chunks):
             v_proj = vertex_config.get("project_id") if vertex_config else None
             v_reg = vertex_config.get("region", "us-central1") if vertex_config else "us-central1"
-            embedding = self.embeddings.embed(chunk.text, task_type="RETRIEVAL_DOCUMENT", project_id=v_proj, region=v_reg)
+            try:
+                embedding = self.embeddings.embed(
+                    chunk.text,
+                    task_type="RETRIEVAL_DOCUMENT",
+                    project_id=v_proj,
+                    region=v_reg,
+                )
+            except Exception as exc:
+                print(f"Embedding ingest fallback: {exc}")
+                embedding = None
+            indexed_chunks.append({
+                "chunk_index": i,
+                "text": chunk.text,
+                "embedding": embedding,
+                "start_char": chunk.start_char,
+                "end_char": chunk.end_char,
+            })
             if embedding:
                 chunk_id = f"c_{media_item_id}_{i}"
                 datapoints.append({
                     "datapoint_id": chunk_id,
                     "feature_vector": embedding
-                })
-                indexed_chunks.append({
-                    "chunk_index": i,
-                    "text": chunk.text,
-                    "embedding": None, # وکتور در SQLite ذخیره نمیشود
-                    "start_char": chunk.start_char,
-                    "end_char": chunk.end_char,
                 })
 
         # BATCH UPSERT TO VERTEX AI
@@ -147,3 +222,21 @@ class IngestionPipeline:
                 print(f"Batch Upsert Failed: {e}")
 
         self.repository.replace_chunks(media_item_id=media_item_id, chunks=indexed_chunks)
+
+    @staticmethod
+    def _combine_text_parts(transcript_text: str | None, caption: str | None) -> str:
+        parts: list[str] = []
+        if transcript_text and transcript_text.strip():
+            parts.append(transcript_text.strip())
+        if caption and caption.strip():
+            caption_text = caption.strip()
+            if caption_text not in parts:
+                parts.append(caption_text)
+        return "\n\n".join(parts).strip()
+
+    @staticmethod
+    def _channel_storage_name(channel_url: str) -> str:
+        parsed = urlparse(channel_url)
+        candidate = parsed.path.strip("/") or parsed.netloc or "channel"
+        safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in candidate)
+        return safe or "channel"

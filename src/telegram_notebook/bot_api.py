@@ -46,10 +46,10 @@ class TelegramBotApi:
 
     def send_message(
         self,
-        *,
         chat_id: int,
         text: str,
         reply_markup: dict[str, object] | None = None,
+        disable_web_page_preview: bool | None = None,
     ) -> None:
         payload: dict[str, object] = {
             "chat_id": chat_id,
@@ -58,6 +58,8 @@ class TelegramBotApi:
         }
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
+        if disable_web_page_preview is not None:
+            payload["disable_web_page_preview"] = disable_web_page_preview
         self.call("sendMessage", payload)
 
     def send_photo(

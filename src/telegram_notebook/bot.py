@@ -9,8 +9,8 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from .bot_api import TelegramBotApi
-from .config import get_settings
-from .db import Repository
+from .config import Settings, get_settings
+from .db import Repository, connect
 from .embeddings import EmbeddingService
 from .pipeline import IngestionPipeline
 from .search import SearchService
@@ -27,7 +27,8 @@ class BotServices:
     api: TelegramBotApi
     repository: Repository
     search_service: SearchService
-    settings: object
+    pipeline: IngestionPipeline
+    settings: Settings
 
 
 def build_services() -> BotServices:
@@ -35,18 +36,34 @@ def build_services() -> BotServices:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required to run the bot")
 
-    repository = Repository(settings.db_path)
+    repository = Repository(connect(settings.db_path))
     repository.init()
     
     embeddings = EmbeddingService(
-        provider="gemini",
-        api_key=settings.gemini_api_key,
-        model="text-embedding-004",
+        provider=settings.embedding_provider,
+        api_key=settings.gemini_api_key if settings.embedding_provider == "gemini" else settings.openai_api_key,
+        model=settings.embedding_model,
     )
-    
+    transcription = TranscriptionService(
+        provider=settings.transcription_provider,
+        api_key=settings.gemini_api_key if settings.transcription_provider == "gemini" else settings.openai_api_key,
+        model=settings.transcription_model,
+    )
+    pipeline = IngestionPipeline(
+        settings=settings,
+        repository=repository,
+        transcription=transcription,
+        embeddings=embeddings,
+    )
     search_service = SearchService(repository, embeddings)
     api = TelegramBotApi(settings.telegram_bot_token)
-    return BotServices(api=api, repository=repository, search_service=search_service, settings=settings)
+    return BotServices(
+        api=api,
+        repository=repository,
+        search_service=search_service,
+        pipeline=pipeline,
+        settings=settings,
+    )
 
 
 def normalize_phone(raw: str) -> str | None:
@@ -105,6 +122,42 @@ class NotebookBot:
             return self.loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout))
         except asyncio.TimeoutError:
             raise RuntimeError("Operation timed out. Please check your connection or try again.")
+
+    def _api_key_for_user(self, user: dict | None, provider: str) -> str | None:
+        if provider == "gemini":
+            return (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
+        if provider == "openai":
+            return self.services.settings.openai_api_key
+        return None
+
+    def _embedding_service_for_user(self, user: dict | None) -> EmbeddingService:
+        provider = self.services.settings.embedding_provider
+        model = (
+            user.get("preferred_embedding_model")
+            if user and user.get("preferred_embedding_model")
+            else self.services.settings.embedding_model
+        )
+        return EmbeddingService(
+            provider=provider,
+            api_key=self._api_key_for_user(user, provider),
+            model=model,
+        )
+
+    def _transcription_service_for_user(self, user: dict | None) -> TranscriptionService:
+        provider = self.services.settings.transcription_provider
+        model = (
+            user.get("preferred_transcription_model")
+            if user and user.get("preferred_transcription_model")
+            else self.services.settings.transcription_model
+        )
+        return TranscriptionService(
+            provider=provider,
+            api_key=self._api_key_for_user(user, provider),
+            model=model,
+        )
+
+    def _search_service_for_user(self, user: dict | None) -> SearchService:
+        return SearchService(self.services.repository, self._embedding_service_for_user(user))
 
     def handle_update(self, update: dict[str, object]) -> None:
         callback = update.get("callback_query")
@@ -291,7 +344,7 @@ class NotebookBot:
                 "deployed_index_id": v_deployed
             }
             
-        results = self.services.search_service.search(query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
+        results = self._search_service_for_user(user).search(query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
         if not results: self.services.api.send_message(chat_id=chat_id, text="No results found.")
         else:
             resp = [f"📍 {r.channel_title}\n{r.chunk_text[:300]}\n🔗 {r.message_url}" for r in results]
@@ -320,10 +373,11 @@ class NotebookBot:
         self.services.api.send_message(chat_id=chat_id, text="🧠 AI Brain is thinking...")
         
         # 1. Search
-        results = self.services.search_service.search(query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
+        search_service = self._search_service_for_user(user)
+        results = search_service.search(query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
         
         # 2. RAG Answer
-        answer = self.services.search_service.generate_answer(
+        answer = search_service.generate_answer(
             query=query,
             results=results,
             api_key=gemini_api_key,
@@ -363,37 +417,36 @@ class NotebookBot:
             return
 
         self.services.api.send_message(chat_id, "Ingesting messages...")
-        from .telegram_client import build_client_from_session_string, iter_all_messages, fetch_channel_info
-        client = build_client_from_session_string(self.services.settings, user["session_string"], api_id=user.get("api_id"), api_hash=user.get("api_hash"))
-        
+
         v_project = user.get("vertex_project_id") or self.services.settings.vertex_project_id
         v_region = user.get("vertex_region") or self.services.settings.vertex_region
         v_index_id = user.get("vertex_index_id") or self.services.settings.vertex_index_id
-        
+
         vertex_config = None
         if v_project and v_region and v_index_id:
             vertex_config = {
                 "api_key": user.get("gemini_api_key") or self.services.settings.gemini_api_key,
-                "project_id": v_project, 
-                "region": v_region, 
+                "project_id": v_project,
+                "region": v_region,
                 "index_id": v_index_id
             }
 
         async def _do():
-            async with client:
-                info = await fetch_channel_info(client, link)
-                channel_id = self.services.repository.upsert_channel(telegram_id=info.telegram_id, channel_url=info.canonical_url, title=info.title, username=info.username)
-                messages = await iter_all_messages(client, channel_url=info.canonical_url, limit=100)
-                from .embeddings import EmbeddingService
-                u_emb = EmbeddingService(provider="gemini", api_key=user.get("gemini_api_key") or self.services.settings.gemini_api_key, model="text-embedding-004")
-                from .pipeline import IngestionPipeline
-                pipeline = IngestionPipeline(settings=self.services.settings, repository=self.services.repository, transcription=None, embeddings=u_emb)
-                count = 0
-                for msg in messages:
-                    mid = self.services.repository.create_or_get_message(channel_id=channel_id, telegram_message_id=msg.telegram_message_id, message_date=msg.message_date, message_url=msg.message_url, caption=msg.caption)
-                    if msg.media_kind == "text" and msg.caption:
-                        await pipeline._process_text_message(mid, msg.caption, vertex_config); count += 1
-                return f"Indexed {count} messages."
+            pipeline = IngestionPipeline(
+                settings=self.services.settings,
+                repository=self.services.repository,
+                transcription=self._transcription_service_for_user(user),
+                embeddings=self._embedding_service_for_user(user),
+            )
+            stats = await pipeline.ingest_channel(
+                channel_url=link,
+                limit=100,
+                api_id=user.get("api_id"),
+                api_hash=user.get("api_hash"),
+                session_string=user["session_string"],
+                vertex_config=vertex_config,
+            )
+            return f"Indexed {stats.processed_media} items from {stats.channel_title or stats.channel_url}."
         try: self.services.api.send_message(chat_id, self._async_to_sync(_do()))
         except Exception as e: self.services.api.send_message(chat_id, f"Error: {e}")
 

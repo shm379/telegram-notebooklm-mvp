@@ -65,9 +65,19 @@ class SearchService:
 
         v_proj = vertex_config.get("project_id") if vertex_config else None
         v_reg = vertex_config.get("region", "us-central1") if vertex_config else "us-central1"
-        query_vector = self.embeddings.embed(query, task_type="RETRIEVAL_QUERY", project_id=v_proj, region=v_reg)
+        try:
+            query_vector = self.embeddings.embed(
+                query,
+                task_type="RETRIEVAL_QUERY",
+                project_id=v_proj,
+                region=v_reg,
+            )
+        except Exception as exc:
+            print(f"Embedding search fallback: {exc}")
+            query_vector = None
         if not query_vector:
-            return []
+            rows = self.repository.keyword_candidates(query=query, top_k=top_k, channel_url=channel_url)
+            return [SearchResult(score=1.0, **r) for r in rows]
 
         if vertex_config and vertex_config.get("index_endpoint_id"):
             try:
