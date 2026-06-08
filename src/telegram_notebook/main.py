@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from dataclasses import asdict, dataclass
 from http import HTTPStatus
@@ -11,10 +12,14 @@ from urllib.parse import parse_qs, urlparse
 from .config import get_settings, upsert_env_values
 from .db import Repository, connect
 from .embeddings import EmbeddingService
+from .logging_config import setup_logging
 from .model_catalog import ModelCatalogService
 from .pipeline import IngestionPipeline
 from .search import SearchService
 from .transcription import TranscriptionService
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -62,6 +67,19 @@ class AppState:
             return self.settings.gemini_api_key
         if provider == "openai":
             return self.settings.openai_api_key
+        return None
+
+    def vertex_search_config(self) -> dict[str, object] | None:
+        """Vertex AI Search config from settings, or None to use local search."""
+        s = self.settings
+        if s.vertex_project_id and s.vertex_region and s.vertex_endpoint_id and s.vertex_deployed_index_id:
+            return {
+                "api_key": s.gemini_api_key,
+                "project_id": s.vertex_project_id,
+                "region": s.vertex_region,
+                "index_endpoint_id": s.vertex_endpoint_id,
+                "deployed_index_id": s.vertex_deployed_index_id,
+            }
         return None
 
     def runtime_config(self) -> RuntimeConfig:
@@ -546,6 +564,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             self._send_json({"detail": "Not found"}, status=HTTPStatus.NOT_FOUND)
         except Exception as exc:
+            logger.exception("GET %s failed", parsed.path)
             self._send_json({"detail": str(exc)}, status=400)
 
     def do_POST(self) -> None:
@@ -595,6 +614,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     }
                 )
             except Exception as exc:
+                logger.exception("Ingest request failed")
                 self._send_json({"detail": str(exc)}, status=400)
             return
 
@@ -610,6 +630,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     query=query,
                     channel_url=str(channel_url).strip() if channel_url else None,
                     top_k=top_k,
+                    vertex_config=state.vertex_search_config(),
                 )
                 self._send_json(
                     {
@@ -618,6 +639,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     }
                 )
             except Exception as exc:
+                logger.exception("Search request failed")
                 self._send_json({"detail": str(exc)}, status=400)
             return
 
@@ -628,17 +650,21 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"detail": "query is required"}, status=400)
                 return
             try:
+                vertex_config = state.vertex_search_config()
                 # 1. Search for relevant chunks
                 results = state.search_service.search(
                     query=query,
                     channel_url=str(channel_url).strip() if channel_url else None,
                     top_k=5,
+                    vertex_config=vertex_config,
                 )
                 # 2. Generate answer
                 answer = state.search_service.generate_answer(
                     query=query,
                     results=results,
                     api_key=state.settings.gemini_api_key,
+                    project_id=state.settings.vertex_project_id,
+                    region=state.settings.vertex_region or "us-central1",
                 )
                 self._send_json(
                     {
@@ -648,6 +674,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     }
                 )
             except Exception as exc:
+                logger.exception("Ask request failed")
                 self._send_json({"detail": str(exc)}, status=400)
             return
 
@@ -658,8 +685,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 
 def run(host: str = "127.0.0.1", port: int = 8000) -> None:
+    setup_logging()
     server = ThreadingHTTPServer((host, port), RequestHandler)
-    print(f"Serving on http://{host}:{port}")
+    logger.info("Serving on http://%s:%s", host, port)
     server.serve_forever()
 
 

@@ -326,6 +326,29 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 res = conn.execute("SELECT * FROM bot_users WHERE bot_user_id = ?", (bot_user_id,)).fetchone()
                 return dict(res) if res else None
 
+    def disconnect_bot_user(self, *, bot_user_id: int) -> bool:
+        """Remove a user's session and credentials. Returns True if a session existed."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                res = conn.execute(
+                    "SELECT session_string FROM bot_users WHERE bot_user_id = ?",
+                    (bot_user_id,),
+                ).fetchone()
+                had_session = bool(res and res[0])
+                conn.execute(
+                    """
+                    UPDATE bot_users SET
+                        session_string = NULL, api_id = NULL, api_hash = NULL,
+                        phone = NULL, connected_at = NULL, gemini_api_key = NULL,
+                        vertex_project_id = NULL, vertex_region = NULL, vertex_index_id = NULL,
+                        vertex_endpoint_id = NULL, vertex_deployed_index_id = NULL
+                    WHERE bot_user_id = ?
+                    """,
+                    (bot_user_id,),
+                )
+                conn.commit()
+                return had_session
+
     def save_bot_user_phone(self, *, bot_user_id: int, phone: str) -> None:
         with self.lock:
             with sqlite3.connect(self.path) as conn:

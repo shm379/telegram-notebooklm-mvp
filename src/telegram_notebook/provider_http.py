@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import ssl
 import subprocess
 from pathlib import Path
@@ -11,6 +12,8 @@ import certifi
 
 from .media import guess_mime_type
 
+
+logger = logging.getLogger(__name__)
 
 GEMINI_BASE_URL = "https://aiplatform.googleapis.com/v1/publishers/google"
 
@@ -24,8 +27,8 @@ def get_gcloud_access_token() -> str | None:
             check=True
         )
         return result.stdout.strip()
-    except Exception as e:
-        print(f"Error getting gcloud access token: {e}")
+    except Exception:
+        logger.exception("Error getting gcloud access token")
         return None
 
 
@@ -55,8 +58,8 @@ def _json_request(
     try:
         with request.urlopen(req, timeout=90, context=ssl_context) as response:
             return json.loads(response.read().decode("utf-8"))
-    except Exception as e:
-        print(f"Vertex AI Request Error: {e} to {url}")
+    except Exception:
+        logger.exception("Vertex AI request error to %s", url)
         raise
 
 

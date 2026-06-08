@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -12,14 +12,14 @@ from .bot_api import TelegramBotApi
 from .config import Settings, get_settings
 from .db import Repository, connect
 from .embeddings import EmbeddingService
+from .logging_config import setup_logging
 from .pipeline import IngestionPipeline
 from .search import SearchService
 from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
 from .transcription import TranscriptionService
 
 
-PHONE_RE = re.compile(r"^\+?\d{10,15}$")
-CODE_RE = re.compile(r"^\d[\d\-\s]{2,12}\d$")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -38,7 +38,7 @@ def build_services() -> BotServices:
 
     repository = Repository(connect(settings.db_path))
     repository.init()
-    
+
     embeddings = EmbeddingService(
         provider=settings.embedding_provider,
         api_key=settings.gemini_api_key if settings.embedding_provider == "gemini" else settings.openai_api_key,
@@ -67,30 +67,28 @@ def build_services() -> BotServices:
 
 
 def normalize_phone(raw: str) -> str | None:
-    # تبدیل اعداد فارسی/عربی به انگلیسی
     table = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
     text = raw.translate(table)
-    # استخراج فقط اعداد
     compact = "".join(c for c in text if c.isdigit())
-    if not (10 <= len(compact) <= 15): return None
-    return f"+{compact}" if not text.strip().startswith("+") else f"+{compact}"
+    if not (10 <= len(compact) <= 15):
+        return None
+    return f"+{compact}"
 
 
 def normalize_code(raw: str) -> str | None:
-    if not raw: return None
-    # تبدیل تمام اعداد فارسی و عربی به انگلیسی
+    if not raw:
+        return None
     persian_digits = "۰۱۲۳۴۵۶۷۸۹"
     arabic_digits = "٠١٢٣٤٥٦٧٨٩"
     english_digits = "0123456789"
-    
+
     text = raw
     for i in range(10):
         text = text.replace(persian_digits[i], english_digits[i])
         text = text.replace(arabic_digits[i], english_digits[i])
-    
-    # استخراج فقط و فقط اعداد
+
     compact = "".join(c for c in text if c.isdigit())
-    
+
     if 3 <= len(compact) <= 12:
         return compact
     return None
@@ -105,16 +103,21 @@ class NotebookBot:
         asyncio.set_event_loop(self.loop)
 
     def run_forever(self) -> None:
-        print(f"Bot polling started...")
+        logger.info("Bot polling started")
         while True:
             try:
                 updates = self.services.api.get_updates(offset=self.offset, timeout=30)
                 for update in updates:
                     self.offset = int(update["update_id"]) + 1
-                    self.handle_update(update)
-            except KeyboardInterrupt: break
-            except Exception as exc:
-                print(f"bot polling error: {exc}")
+                    try:
+                        self.handle_update(update)
+                    except Exception:
+                        logger.exception("Failed to handle update %s", update.get("update_id"))
+            except KeyboardInterrupt:
+                logger.info("Bot stopped by KeyboardInterrupt")
+                break
+            except Exception:
+                logger.exception("Bot polling error")
                 time.sleep(3)
 
     def _async_to_sync(self, coro, timeout: int = 60):
@@ -166,64 +169,156 @@ class NotebookBot:
             return
 
         message = update.get("message")
-        if not isinstance(message, dict): return
+        if not isinstance(message, dict):
+            return
 
         chat_id = int(message["chat"]["id"])
         sender = message.get("from") or {}
         bot_user_id = int(sender.get("id", 0))
-        if not bot_user_id: return
+        if not bot_user_id:
+            return
 
-        self.services.repository.upsert_bot_user(bot_user_id=bot_user_id, chat_id=chat_id, username=sender.get("username"), first_name=sender.get("first_name"))
+        self.services.repository.upsert_bot_user(
+            bot_user_id=bot_user_id,
+            chat_id=chat_id,
+            username=sender.get("username"),
+            first_name=sender.get("first_name"),
+        )
 
         if "contact" in message:
             self._handle_contact(chat_id, bot_user_id, message["contact"])
             return
 
         text = str(message.get("text", "")).strip()
-        if not text: return
+        if not text:
+            return
 
-        if text.startswith("/start"): self._send_welcome(chat_id)
-        elif text.startswith("/version"): self.services.api.send_message(chat_id=chat_id, text="Bot Version: v4.0 (Aggressive Cleanup)")
-        elif text.startswith("/connect"): self._begin_connect(chat_id, bot_user_id)
-        elif text.startswith("/cancel"):
-            self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
-            self.services.api.send_message(chat_id=chat_id, text="Operation cancelled.", reply_markup=TelegramBotApi.remove_keyboard())
-        elif text.startswith("/search"):
-            query = text.removeprefix("/search").strip()
-            source = None
-            if " --source " in query:
-                parts = query.split(" --source ")
-                query, source = parts[0].strip(), parts[1].strip()
-            self._search(chat_id, query, source)
-        elif text.startswith("/ask"):
-            query = text.removeprefix("/ask").strip()
-            source = None
-            if " --source " in query:
-                parts = query.split(" --source ")
-                query, source = parts[0].strip(), parts[1].strip()
-            self._ask_brain(chat_id, query, source)
-        elif text.startswith("/join"): self._handle_join(chat_id, bot_user_id, text.removeprefix("/join").strip())
-        elif text.startswith("/ingest"): self._handle_ingest(chat_id, bot_user_id, text.removeprefix("/ingest").strip())
-        elif text.startswith("/sources"): self._handle_sources(chat_id)
-        elif text.startswith("/delete"): self._handle_delete(chat_id, text.removeprefix("/delete").strip())
-        
+        if text.startswith("/"):
+            self._handle_command(chat_id, bot_user_id, text)
+            return
+
         flow = self.services.repository.get_auth_flow(bot_user_id=bot_user_id)
         if flow:
             st = flow["status"]
-            if st == "awaiting_gemini_key": self._handle_gemini_key(chat_id, bot_user_id, text)
-            elif st == "awaiting_v_project": self._handle_v_project(chat_id, bot_user_id, text, flow)
-            elif st == "awaiting_v_region": self._handle_v_region(chat_id, bot_user_id, text, flow)
-            elif st == "awaiting_v_index": self._handle_v_index(chat_id, bot_user_id, text, flow)
-            elif st == "awaiting_v_endpoint": self._handle_v_endpoint(chat_id, bot_user_id, text, flow)
-            elif st == "awaiting_v_deployed": self._handle_v_deployed(chat_id, bot_user_id, text, flow)
-            elif st == "awaiting_api_id": self._handle_api_id(chat_id, bot_user_id, text, flow)
-            elif st == "awaiting_api_hash": self._handle_api_hash(chat_id, bot_user_id, text, flow)
-            elif st == "awaiting_login_phone": self._handle_login_phone(chat_id, bot_user_id, text, flow)
-            elif st == "awaiting_code": self._handle_code(chat_id, bot_user_id, text, flow)
-            elif st == "awaiting_password": self._handle_password(chat_id, bot_user_id, text, flow)
+            if st == "awaiting_gemini_key":
+                self._handle_gemini_key(chat_id, bot_user_id, text)
+            elif st == "awaiting_v_project":
+                self._handle_v_project(chat_id, bot_user_id, text, flow)
+            elif st == "awaiting_v_region":
+                self._handle_v_region(chat_id, bot_user_id, text, flow)
+            elif st == "awaiting_v_index":
+                self._handle_v_index(chat_id, bot_user_id, text, flow)
+            elif st == "awaiting_v_endpoint":
+                self._handle_v_endpoint(chat_id, bot_user_id, text, flow)
+            elif st == "awaiting_v_deployed":
+                self._handle_v_deployed(chat_id, bot_user_id, text, flow)
+            elif st == "awaiting_api_id":
+                self._handle_api_id(chat_id, bot_user_id, text, flow)
+            elif st == "awaiting_api_hash":
+                self._handle_api_hash(chat_id, bot_user_id, text, flow)
+            elif st == "awaiting_login_phone":
+                self._handle_login_phone(chat_id, bot_user_id, text, flow)
+            elif st == "awaiting_code":
+                self._handle_code(chat_id, bot_user_id, text, flow)
+            elif st == "awaiting_password":
+                self._handle_password(chat_id, bot_user_id, text, flow)
+
+    def _handle_command(self, chat_id: int, bot_user_id: int, text: str) -> None:
+        command = text.split()[0].split("@")[0].lower()
+        if command == "/start":
+            self._send_welcome(chat_id)
+        elif command == "/help":
+            self._send_help(chat_id)
+        elif command == "/version":
+            self.services.api.send_message(chat_id=chat_id, text="Bot Version: v5.0 (Stabilized Core)")
+        elif command == "/connect":
+            self._begin_connect(chat_id, bot_user_id)
+        elif command == "/status":
+            self._handle_status(chat_id, bot_user_id)
+        elif command == "/disconnect":
+            self._handle_disconnect(chat_id, bot_user_id)
+        elif command == "/cancel":
+            self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
+            self.services.api.send_message(chat_id=chat_id, text="Operation cancelled.", reply_markup=TelegramBotApi.remove_keyboard())
+        elif command == "/search":
+            query, source = self._split_source(text.removeprefix("/search").strip())
+            self._search(chat_id, bot_user_id, query, source)
+        elif command == "/ask":
+            query, source = self._split_source(text.removeprefix("/ask").strip())
+            self._ask_brain(chat_id, bot_user_id, query, source)
+        elif command == "/join":
+            self._handle_join(chat_id, bot_user_id, text.removeprefix("/join").strip())
+        elif command == "/ingest":
+            self._handle_ingest(chat_id, bot_user_id, text.removeprefix("/ingest").strip())
+        elif command == "/sources":
+            self._handle_sources(chat_id)
+        elif command == "/delete":
+            self._handle_delete(chat_id, text.removeprefix("/delete").strip())
+        else:
+            self.services.api.send_message(chat_id=chat_id, text="Unknown command. Send /help to see what I can do.")
+
+    @staticmethod
+    def _split_source(query: str) -> tuple[str, str | None]:
+        if " --source " in query:
+            head, _, tail = query.partition(" --source ")
+            return head.strip(), (tail.strip() or None)
+        return query.strip(), None
 
     def _send_welcome(self, chat_id: int) -> None:
-        self.services.api.send_message(chat_id=chat_id, text="Welcome! I'm your AI Research Assistant.\nUse /connect to link your account and configure Vertex AI.")
+        self.services.api.send_message(
+            chat_id=chat_id,
+            text=(
+                "Welcome! I'm your AI Research Assistant.\n"
+                "Use /connect to link your account and configure Vertex AI.\n"
+                "Send /help to see all commands."
+            ),
+        )
+
+    def _send_help(self, chat_id: int) -> None:
+        help_text = (
+            "<b>Available commands</b>\n"
+            "/connect — link your Telegram account and configure AI\n"
+            "/status — show your connection and indexing status\n"
+            "/disconnect — remove your saved session and credentials\n"
+            "/ingest &lt;channel_url&gt; — index a channel or source\n"
+            "/search &lt;query&gt; [--source &lt;url&gt;] — keyword/semantic search\n"
+            "/ask &lt;question&gt; [--source &lt;url&gt;] — ask the AI over your archive\n"
+            "/sources — list indexed sources\n"
+            "/delete &lt;channel_url&gt; — delete a source's data\n"
+            "/cancel — cancel the current flow"
+        )
+        self.services.api.send_message(chat_id=chat_id, text=help_text)
+
+    def _handle_status(self, chat_id: int, bot_user_id: int) -> None:
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        connected = bool(user and user.get("session_string"))
+        gemini_set = bool((user and user.get("gemini_api_key")) or self.services.settings.gemini_api_key)
+        vertex_ready = bool(
+            (user.get("vertex_project_id") if user else None) or self.services.settings.vertex_project_id
+        )
+        sources_count = len(self.services.repository.list_channels())
+        lines = [
+            "<b>Status</b>",
+            f"• Account linked: {'✅ yes' if connected else '❌ no (use /connect)'}",
+            f"• AI key configured: {'✅ yes' if gemini_set else '❌ no'}",
+            f"• Vertex AI Search: {'✅ configured' if vertex_ready else 'local search only'}",
+            f"• Indexed sources: {sources_count}",
+        ]
+        if connected and user.get("phone"):
+            lines.append(f"• Linked phone: {user['phone']}")
+        self.services.api.send_message(chat_id=chat_id, text="\n".join(lines))
+
+    def _handle_disconnect(self, chat_id: int, bot_user_id: int) -> None:
+        self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
+        removed = self.services.repository.disconnect_bot_user(bot_user_id=bot_user_id)
+        if removed:
+            self.services.api.send_message(
+                chat_id=chat_id,
+                text="Disconnected. Your saved session and credentials were removed. Use /connect to link again.",
+                reply_markup=TelegramBotApi.remove_keyboard(),
+            )
+        else:
+            self.services.api.send_message(chat_id=chat_id, text="You have no linked account to disconnect.")
 
     def _begin_connect(self, chat_id: int, bot_user_id: int) -> None:
         self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone="", api_id=None, api_hash=None, session_string="", phone_code_hash="", status="awaiting_phone_initial")
@@ -233,14 +328,14 @@ class NotebookBot:
         phone = normalize_phone(str(contact.get("phone_number", "")))
         self.services.repository.save_bot_user_phone(bot_user_id=bot_user_id, phone=phone)
         self.services.repository.update_auth_flow_status(bot_user_id=bot_user_id, status="awaiting_gemini_key")
-        
+
         guide_text = (
             "<b>Step 2: Vertex AI API Key</b>\n"
             "Please provide your Vertex AI API Key (starts with AQ.) or AI Studio Key (starts with AIza).\n"
             "You can get it from <a href='https://aistudio.google.com/app/apikey'>Google AI Studio</a>.\n"
             "Then send it here:"
         )
-        
+
         photo_path = Path("data/media/gemini_guide.jpg")
         if photo_path.exists():
             self.services.api.send_photo(chat_id=chat_id, photo_path=photo_path, caption=guide_text)
@@ -276,7 +371,8 @@ class NotebookBot:
         self.services.api.send_message(chat_id=chat_id, text="<b>Step 4: Telegram API</b>\nGo to <a href='https://my.telegram.org'>my.telegram.org</a> and create an app.\nSend your <b>API_ID</b>:")
 
     def _handle_api_id(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
-        if not text.isdigit(): return
+        if not text.isdigit():
+            return
         self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=flow["phone"], api_id=int(text), api_hash=None, session_string="", phone_code_hash="", status="awaiting_api_hash", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=flow["vertex_deployed_index_id"])
         self.services.api.send_message(chat_id=chat_id, text="Send your <b>API_HASH</b>:")
 
@@ -295,13 +391,13 @@ class NotebookBot:
             self.services.repository.upsert_auth_flow(bot_user_id=bot_user_id, chat_id=chat_id, phone=phone, api_id=flow["api_id"], api_hash=flow["api_hash"], session_string=res["session_string"], phone_code_hash=res["phone_code_hash"], status="awaiting_code", v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=flow["vertex_deployed_index_id"])
             self.services.api.send_message(chat_id=chat_id, text="Code sent to your Telegram. Enter it here:")
         except Exception as e:
-            print(f"Auth Error: {e}")
+            logger.exception("Auth error while requesting login code")
             self.services.api.send_message(chat_id=chat_id, text=f"Error: {e}")
 
     def _handle_code(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
         code = normalize_code(text)
         if not code:
-            self.services.api.send_message(chat_id=chat_id, text="Invalid code format (v4). Please try again.")
+            self.services.api.send_message(chat_id=chat_id, text="Invalid code format. Please try again.")
             return
         self.services.api.send_message(chat_id=chat_id, text="Verifying code with Telegram...")
         try:
@@ -312,9 +408,9 @@ class NotebookBot:
                 return
             self.services.repository.save_bot_user_session(bot_user_id=bot_user_id, phone=flow["phone"], api_id=flow["api_id"], api_hash=flow["api_hash"], session_string=res["session_string"], connected_at=res["connected_at"], v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=flow["vertex_deployed_index_id"])
             self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
-            self.services.api.send_message(chat_id=chat_id, text="Connected! 🎉 Everything is ready.")
+            self.services.api.send_message(chat_id=chat_id, text="Connected! Everything is ready.")
         except Exception as e:
-            print(f"Code verification error: {e}")
+            logger.exception("Code verification error during sign in")
             self.services.api.send_message(chat_id=chat_id, text=f"Error during sign in: {e}")
 
     def _handle_password(self, chat_id: int, bot_user_id: int, text: str, flow: dict) -> None:
@@ -323,97 +419,122 @@ class NotebookBot:
             self.services.repository.save_bot_user_session(bot_user_id=bot_user_id, phone=flow["phone"], api_id=flow["api_id"], api_hash=flow["api_hash"], session_string=res["session_string"], connected_at=res["connected_at"], v_project=flow["vertex_project_id"], v_region=flow["vertex_region"], v_index=flow["vertex_index_id"], v_endpoint=flow["vertex_endpoint_id"], v_deployed=flow["vertex_deployed_index_id"])
             self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
             self.services.api.send_message(chat_id=chat_id, text="Connected!")
-        except Exception as e: self.services.api.send_message(chat_id=chat_id, text=f"Error: {e}")
+        except Exception as e:
+            logger.exception("Password sign-in error")
+            self.services.api.send_message(chat_id=chat_id, text=f"Error: {e}")
 
-    def _search(self, chat_id: int, query: str, source: str | None) -> None:
-        user = self.services.repository.get_bot_user(bot_user_id=chat_id)
-        
-        # Build vertex_config from user data or settings defaults
-        v_project = (user.get("vertex_project_id") if user else None) or self.services.settings.vertex_project_id
-        v_region = (user.get("vertex_region") if user else None) or self.services.settings.vertex_region
-        v_index_endpoint = (user.get("vertex_endpoint_id") if user else None) or self.services.settings.vertex_endpoint_id
-        v_deployed = (user.get("vertex_deployed_index_id") if user else None) or self.services.settings.vertex_deployed_index_id
-        
-        vertex_config = None
-        if v_project and v_region and v_index_endpoint and v_deployed:
-            vertex_config = {
-                "api_key": user.get("gemini_api_key") if user else None,
+    def _vertex_search_config(self, user: dict | None) -> dict | None:
+        """Build a Vertex AI Search config from per-user data, falling back to settings."""
+        s = self.services.settings
+        v_project = (user.get("vertex_project_id") if user else None) or s.vertex_project_id
+        v_region = (user.get("vertex_region") if user else None) or s.vertex_region
+        v_endpoint = (user.get("vertex_endpoint_id") if user else None) or s.vertex_endpoint_id
+        v_deployed = (user.get("vertex_deployed_index_id") if user else None) or s.vertex_deployed_index_id
+        if v_project and v_region and v_endpoint and v_deployed:
+            return {
+                "api_key": (user.get("gemini_api_key") if user else None) or s.gemini_api_key,
                 "project_id": v_project,
                 "region": v_region,
-                "index_endpoint_id": v_index_endpoint,
-                "deployed_index_id": v_deployed
+                "index_endpoint_id": v_endpoint,
+                "deployed_index_id": v_deployed,
             }
-            
-        results = self._search_service_for_user(user).search(query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
-        if not results: self.services.api.send_message(chat_id=chat_id, text="No results found.")
+        return None
+
+    def _search(self, chat_id: int, bot_user_id: int, query: str, source: str | None) -> None:
+        if not query:
+            self.services.api.send_message(chat_id=chat_id, text="Usage: /search <query> [--source <url>]")
+            return
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        vertex_config = self._vertex_search_config(user)
+        try:
+            results = self._search_service_for_user(user).search(
+                query=query, channel_url=source, top_k=5, vertex_config=vertex_config
+            )
+        except Exception:
+            logger.exception("Search failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id=chat_id, text="Search failed. Please try again later.")
+            return
+        if not results:
+            self.services.api.send_message(chat_id=chat_id, text="No results found.")
         else:
-            resp = [f"📍 {r.channel_title}\n{r.chunk_text[:300]}\n🔗 {r.message_url}" for r in results]
+            resp = [f"{r.channel_title}\n{r.chunk_text[:300]}\n{r.message_url}" for r in results]
             self.services.api.send_message(chat_id=chat_id, text="\n\n".join(resp))
 
-    def _ask_brain(self, chat_id: int, query: str, source: str | None) -> None:
-        user = self.services.repository.get_bot_user(bot_user_id=chat_id)
-        
-        # Build vertex_config/gemini_key
+    def _ask_brain(self, chat_id: int, bot_user_id: int, query: str, source: str | None) -> None:
+        if not query:
+            self.services.api.send_message(chat_id=chat_id, text="Usage: /ask <question> [--source <url>]")
+            return
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
         gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
-        v_project = (user.get("vertex_project_id") if user else None) or self.services.settings.vertex_project_id
-        v_region = (user.get("vertex_region") if user else None) or self.services.settings.vertex_region
-        v_index_endpoint = (user.get("vertex_endpoint_id") if user else None) or self.services.settings.vertex_endpoint_id
-        v_deployed = (user.get("vertex_deployed_index_id") if user else None) or self.services.settings.vertex_deployed_index_id
-        
-        vertex_config = None
-        if v_project and v_region and v_index_endpoint and v_deployed:
-            vertex_config = {
-                "api_key": gemini_api_key,
-                "project_id": v_project,
-                "region": v_region,
-                "index_endpoint_id": v_index_endpoint,
-                "deployed_index_id": v_deployed
-            }
-        
-        self.services.api.send_message(chat_id=chat_id, text="🧠 AI Brain is thinking...")
-        
-        # 1. Search
-        search_service = self._search_service_for_user(user)
-        results = search_service.search(query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
-        
-        # 2. RAG Answer
-        answer = search_service.generate_answer(
-            query=query,
-            results=results,
-            api_key=gemini_api_key,
-            project_id=v_project,
-            region=v_region
-        )
-        
-        # 3. Response
-        self.services.api.send_message(chat_id=chat_id, text=f"💡 **AI Answer:**\n\n{answer}")
-        
+        vertex_config = self._vertex_search_config(user)
+        v_project = vertex_config["project_id"] if vertex_config else self.services.settings.vertex_project_id
+        v_region = vertex_config["region"] if vertex_config else self.services.settings.vertex_region
+
+        self.services.api.send_message(chat_id=chat_id, text="AI Brain is thinking...")
+        try:
+            search_service = self._search_service_for_user(user)
+            results = search_service.search(query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
+            answer = search_service.generate_answer(
+                query=query,
+                results=results,
+                api_key=gemini_api_key,
+                project_id=v_project,
+                region=v_region,
+            )
+        except Exception:
+            logger.exception("Ask failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id=chat_id, text="Sorry, I couldn't generate an answer right now. Please try again later.")
+            return
+
+        self.services.api.send_message(chat_id=chat_id, text=f"<b>AI Answer:</b>\n\n{answer}")
         if results:
-            sources_text = "\n".join([f"• {r.channel_title or r.channel_url} ({r.message_url})" for r in results[:3]])
-            self.services.api.send_message(chat_id=chat_id, text=f"📚 **Sources:**\n{sources_text}", disable_web_page_preview=True)
+            sources_text = "\n".join([f"- {r.channel_title or r.channel_url} ({r.message_url})" for r in results[:3]])
+            self.services.api.send_message(chat_id=chat_id, text=f"<b>Sources:</b>\n{sources_text}", disable_web_page_preview=True)
 
     def _handle_sources(self, chat_id: int) -> None:
         ch = self.services.repository.list_channels()
-        if not ch: self.services.api.send_message(chat_id, "No sources indexed.")
-        else: self.services.api.send_message(chat_id, "\n".join([f"📚 {c.get('channel_title') or 'Unknown'}: {c['channel_url']}" for c in ch]))
+        if not ch:
+            self.services.api.send_message(chat_id, "No sources indexed.")
+        else:
+            self.services.api.send_message(chat_id, "\n".join([f"{c.get('channel_title') or 'Unknown'}: {c['channel_url']}" for c in ch]))
 
     def _handle_delete(self, chat_id: int, link: str) -> None:
-        if self.services.repository.delete_channel_data(channel_url=link): self.services.api.send_message(chat_id, "Deleted.")
-        else: self.services.api.send_message(chat_id, "Not found.")
+        if not link:
+            self.services.api.send_message(chat_id, "Usage: /delete <channel_url>")
+            return
+        if self.services.repository.delete_channel_data(channel_url=link):
+            self.services.api.send_message(chat_id, "Deleted.")
+        else:
+            self.services.api.send_message(chat_id, "Not found.")
 
     def _handle_join(self, chat_id: int, bot_user_id: int, link: str) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        if not user or not user.get("session_string"):
+            self.services.api.send_message(chat_id, "Please /connect first.")
+            return
+        if not link:
+            self.services.api.send_message(chat_id, "Usage: /join <channel_or_invite_link>")
+            return
         from .telegram_client import build_client_from_session_string, join_chat
         client = build_client_from_session_string(self.services.settings, user["session_string"], api_id=user.get("api_id"), api_hash=user.get("api_hash"))
+
         async def _do():
-            async with client: return await join_chat(client, link)
-        try: self.services.api.send_message(chat_id, self._async_to_sync(_do()))
-        except Exception as e: self.services.api.send_message(chat_id, f"Error: {e}")
+            async with client:
+                return await join_chat(client, link)
+
+        try:
+            self.services.api.send_message(chat_id, self._async_to_sync(_do()))
+        except Exception as e:
+            logger.exception("Join failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, f"Error: {e}")
 
     def _handle_ingest(self, chat_id: int, bot_user_id: int, link: str) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
         if not user or not user["session_string"]:
             self.services.api.send_message(chat_id, "Please /connect first.")
+            return
+        if not link:
+            self.services.api.send_message(chat_id, "Usage: /ingest <channel_url>")
             return
 
         self.services.api.send_message(chat_id, "Ingesting messages...")
@@ -428,7 +549,7 @@ class NotebookBot:
                 "api_key": user.get("gemini_api_key") or self.services.settings.gemini_api_key,
                 "project_id": v_project,
                 "region": v_region,
-                "index_id": v_index_id
+                "index_id": v_index_id,
             }
 
         async def _do():
@@ -447,14 +568,22 @@ class NotebookBot:
                 vertex_config=vertex_config,
             )
             return f"Indexed {stats.processed_media} items from {stats.channel_title or stats.channel_url}."
-        try: self.services.api.send_message(chat_id, self._async_to_sync(_do()))
-        except Exception as e: self.services.api.send_message(chat_id, f"Error: {e}")
 
-    def _handle_callback(self, callback: dict) -> None: pass
+        try:
+            self.services.api.send_message(chat_id, self._async_to_sync(_do()))
+        except Exception as e:
+            logger.exception("Ingest failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, f"Error: {e}")
+
+    def _handle_callback(self, callback: dict) -> None:
+        pass
+
 
 def main() -> None:
+    setup_logging()
     bot = NotebookBot(build_services())
     bot.run_forever()
+
 
 if __name__ == "__main__":
     main()

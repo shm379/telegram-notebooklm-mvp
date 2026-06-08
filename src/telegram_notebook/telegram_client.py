@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,6 +9,9 @@ from urllib.parse import urlparse
 
 from .config import Settings
 from .media import detect_media_kind
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -242,21 +246,19 @@ async def request_login_code(
     api_id: int | None = None,
     api_hash: str | None = None,
 ) -> dict[str, str]:
-    print(f"DEBUG: Initializing client for {phone}...")
+    logger.debug("Initializing Telegram client to request login code")
     client = build_client_from_session_string(settings, "", api_id=api_id, api_hash=api_hash)
     try:
-        print("DEBUG: Connecting to Telegram...")
         await client.connect()
-        print("DEBUG: Connected. Requesting code...")
         result = await client.send_code_request(phone)
-        print(f"DEBUG: Code sent. Hash: {result.phone_code_hash}")
+        logger.debug("Login code requested successfully")
         return {
             "session_string": client.session.save(),
             "phone_code_hash": result.phone_code_hash,
             "phone": phone,
         }
-    except Exception as e:
-        print(f"DEBUG ERROR: {e}")
+    except Exception:
+        logger.exception("Failed to request login code")
         raise
     finally:
         await client.disconnect()
@@ -274,32 +276,31 @@ async def sign_in_with_code(
 ) -> dict[str, str]:
     from telethon.errors import SessionPasswordNeededError
 
-    print(f"DEBUG: Signing in with code for {phone}...")
+    logger.debug("Signing in with login code")
     client = build_client_from_session_string(
         settings, session_string, api_id=api_id, api_hash=api_hash
     )
     try:
         await client.connect()
-        print("DEBUG: Connected to Telegram for sign-in.")
         await client.sign_in(
             phone=phone,
             code=code,
             phone_code_hash=phone_code_hash,
         )
-        print("DEBUG: Sign-in successful!")
+        logger.debug("Sign-in with code successful")
         return {
             "status": "authorized",
             "session_string": client.session.save(),
             "connected_at": datetime.now(timezone.utc).isoformat(),
         }
     except SessionPasswordNeededError:
-        print("DEBUG: 2FA Password required.")
+        logger.debug("Two-step verification password required")
         return {
             "status": "password_required",
             "session_string": client.session.save(),
         }
-    except Exception as e:
-        print(f"DEBUG ERROR during sign-in: {e}")
+    except Exception:
+        logger.exception("Failed to sign in with code")
         raise
     finally:
         await client.disconnect()
@@ -313,21 +314,21 @@ async def sign_in_with_password(
     api_id: int | None = None,
     api_hash: str | None = None,
 ) -> dict[str, str]:
-    print("DEBUG: Signing in with 2FA password...")
+    logger.debug("Signing in with two-step verification password")
     client = build_client_from_session_string(
         settings, session_string, api_id=api_id, api_hash=api_hash
     )
     try:
         await client.connect()
         await client.sign_in(password=password)
-        print("DEBUG: 2FA Sign-in successful!")
+        logger.debug("Sign-in with password successful")
         return {
             "status": "authorized",
             "session_string": client.session.save(),
             "connected_at": datetime.now(timezone.utc).isoformat(),
         }
-    except Exception as e:
-        print(f"DEBUG ERROR during password sign-in: {e}")
+    except Exception:
+        logger.exception("Failed to sign in with password")
         raise
     finally:
         await client.disconnect()

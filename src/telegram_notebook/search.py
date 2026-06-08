@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -7,6 +8,9 @@ from .db import Repository
 from .embeddings import EmbeddingService
 from .provider_http import vertex_ai_search, gemini_generate_content
 from .models import SearchResult
+
+
+logger = logging.getLogger(__name__)
 
 
 class SearchService:
@@ -72,8 +76,8 @@ class SearchService:
                 project_id=v_proj,
                 region=v_reg,
             )
-        except Exception as exc:
-            print(f"Embedding search fallback: {exc}")
+        except Exception:
+            logger.warning("Embedding query failed; falling back to keyword search", exc_info=True)
             query_vector = None
         if not query_vector:
             rows = self.repository.keyword_candidates(query=query, top_k=top_k, channel_url=channel_url)
@@ -121,8 +125,8 @@ class SearchService:
                 if final_results:
                     return final_results
                     
-            except Exception as e:
-                print(f"Vertex Search Error: {e}")
+            except Exception:
+                logger.exception("Vertex AI search failed; falling back to keyword search")
 
         # Fallback to keyword search for now
         rows = self.repository.keyword_candidates(query=query, top_k=top_k, channel_url=channel_url)

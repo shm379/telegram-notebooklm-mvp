@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -9,6 +10,9 @@ from .config import Settings
 from .db import Repository
 from .embeddings import EmbeddingService
 from .transcription import TranscriptionService
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -191,8 +195,8 @@ class IngestionPipeline:
                     project_id=v_proj,
                     region=v_reg,
                 )
-            except Exception as exc:
-                print(f"Embedding ingest fallback: {exc}")
+            except Exception:
+                logger.warning("Embedding failed for chunk %s; storing without embedding", i, exc_info=True)
                 embedding = None
             indexed_chunks.append({
                 "chunk_index": i,
@@ -218,8 +222,8 @@ class IngestionPipeline:
                     index_id=vertex_config["index_id"],
                     datapoints=datapoints
                 )
-            except Exception as e:
-                print(f"Batch Upsert Failed: {e}")
+            except Exception:
+                logger.exception("Batch upsert to Vertex AI failed")
 
         self.repository.replace_chunks(media_item_id=media_item_id, chunks=indexed_chunks)
 

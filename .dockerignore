@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+venv
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache
+.env
+.env.*
+data/
+*.session
+*.session-journal
+.DS_Store
+*.md
+!README.md

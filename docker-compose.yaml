@@ -1,0 +1,82 @@
+# docker-compose for deploying Telegram NotebookLM MVP on Coolify.
+#
+# Services:
+#   bot — the Telegram bot worker. No exposed ports.
+#   web — the web UI/API on port 8000, INTERNAL ONLY (not published to the host
+#         and not assigned a public domain). Reachable only inside the Coolify
+#         stack network at http://web:8000.
+#
+# Environment variables below are surfaced in Coolify's UI. Set them there.
+#   Required:  TELEGRAM_BOT_TOKEN
+#   Telegram:  TELEGRAM_API_ID, TELEGRAM_API_HASH (and optionally TELEGRAM_SESSION_STRING)
+#   AI:        set at least one of GEMINI_API_KEY / OPENAI_API_KEY
+#
+# To later expose the web UI publicly, assign a domain to the `web` service in
+# Coolify (it listens on container port 8000) — but note it has NO authentication.
+
+x-app-env: &app-env
+  # Container paths -> persistent volume. Do not change these.
+  DATA_DIR: /app/data
+  DB_PATH: /app/data/store.db
+  MEDIA_DIR: /app/data/media
+  APP_NAME: ${APP_NAME:-Telegram Notebook}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  # Telegram
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?}
+  TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+  TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+  TELEGRAM_SESSION_STRING: ${TELEGRAM_SESSION_STRING:-}
+  TELEGRAM_SESSION_NAME: ${TELEGRAM_SESSION_NAME:-telegram-notebook}
+  # AI providers (set at least one)
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  TRANSCRIPTION_PROVIDER: ${TRANSCRIPTION_PROVIDER:-gemini}
+  TRANSCRIPTION_MODEL: ${TRANSCRIPTION_MODEL:-gemini-flash-latest}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-gemini}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-gemini-embedding-001}
+  # Chunking / search
+  CHUNK_SIZE: ${CHUNK_SIZE:-900}
+  CHUNK_OVERLAP: ${CHUNK_OVERLAP:-120}
+  DEFAULT_RESULT_LIMIT: ${DEFAULT_RESULT_LIMIT:-8}
+  # Vertex AI Search (optional; leave blank for local keyword/cosine search)
+  VERTEX_PROJECT_ID: ${VERTEX_PROJECT_ID:-}
+  VERTEX_REGION: ${VERTEX_REGION:-us-central1}
+  VERTEX_INDEX_ID: ${VERTEX_INDEX_ID:-}
+  VERTEX_ENDPOINT_ID: ${VERTEX_ENDPOINT_ID:-}
+  VERTEX_DEPLOYED_INDEX_ID: ${VERTEX_DEPLOYED_INDEX_ID:-}
+  # Optional Telegram proxy
+  TELEGRAM_PROXY_HOST: ${TELEGRAM_PROXY_HOST:-}
+  TELEGRAM_PROXY_PORT: ${TELEGRAM_PROXY_PORT:-}
+  TELEGRAM_PROXY_TYPE: ${TELEGRAM_PROXY_TYPE:-socks5}
+
+services:
+  bot:
+    build: .
+    image: telegram-notebooklm:latest
+    restart: unless-stopped
+    environment: *app-env
+    volumes:
+      - tg-data:/app/data
+    command: ["python", "-m", "telegram_notebook.bot"]
+
+  web:
+    build: .
+    image: telegram-notebooklm:latest
+    restart: unless-stopped
+    environment: *app-env
+    volumes:
+      - tg-data:/app/data
+    # 'expose' (not 'ports') keeps this reachable only on the internal network.
+    expose:
+      - "8000"
+    # main.py binds 127.0.0.1 by default; bind 0.0.0.0 so it is reachable in-network.
+    command: ["python", "-c", "import os; from telegram_notebook.main import run; run(host='0.0.0.0', port=int(os.environ.get('PORT', '8000')))"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  tg-data:
