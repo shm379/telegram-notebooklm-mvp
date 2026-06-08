@@ -1,83 +1,158 @@
-# Telegram Notebook MVP
+# Telegram NotebookLM MVP
 
-یک MVP برای این use case:
+یک MVP برای ساخت **آرشیو هوشمند تلگرام** است؛ پروژه‌ای که بتواند محتوای کانال‌ها، چت‌ها، فایل‌ها، ویدیوها و پیام‌های فورواردشده را جمع‌آوری کند، آن‌ها را به متن قابل جستجو تبدیل کند و در نهایت مثل یک **NotebookLM داخلی برای تلگرام** به سؤال‌های کاربر پاسخ دهد.
 
-1. لینک یک کانال عمومی تلگرام را می‌دهید.
-2. پست‌های دارای ویدیو/صوت دانلود می‌شوند.
-3. صوت از ویدیو استخراج و به متن تبدیل می‌شود.
-4. متن chunk و embed می‌شود.
-5. روی transcriptها جست‌وجوی keyword + semantic دارید.
-6. از داخل Settings می‌توانید provider و model را بین OpenAI و Gemini عوض کنید.
+هدف نهایی پروژه این است که کاربر بتواند محتوای تلگرام خود را به یک حافظه قابل جستجو و قابل اتصال به ابزارهای AI تبدیل کند؛ از داخل ربات تلگرام، داشبورد وب، و در آینده از طریق MCP برای اتصال به ابزارهایی مثل ChatGPT، Claude، Cursor، Codex-like agents و سایر AI clients.
+
+---
+
+## ایده اصلی
+
+این پروژه سه حالت اصلی را هدف می‌گیرد:
+
+### 1. Import Channel / Chat
+
+کاربر لینک یا آیدی یک کانال عمومی یا چتی که به آن دسترسی دارد را می‌دهد و سیستم پیام‌ها، کپشن‌ها و مدیاهای آن را دریافت می‌کند.
+
+نمونه:
+
+```text
+/ingest https://t.me/example_channel
+```
+
+### 2. Forwarded Inbox
+
+کاربر می‌تواند پیام، پست، فایل، عکس، ویدیو، PDF یا هر محتوایی را به ربات فوروارد کند. سیستم آن را ذخیره، پردازش، تگ‌گذاری و قابل جستجو می‌کند.
+
+این بخش قرار است شبیه یک **Smart Telegram Inbox** عمل کند.
+
+### 3. AI Notebook / RAG
+
+بعد از ذخیره و ایندکس شدن محتوا، کاربر می‌تواند از آرشیو خود سؤال بپرسد:
+
+```text
+/ask از بین پیام‌هایی که درباره Al Mouj ذخیره کردم، کدام‌ها درباره townhouse بودند؟
+```
+
+یا:
+
+```text
+/ask ابزارهای AI که در کانال‌ها درباره ساخت ویدیو معرفی شده‌اند را دسته‌بندی کن
+```
+
+پاسخ باید همراه با منبع، لینک پیام و متن‌های مرتبط باشد.
+
+---
+
+## وضعیت فعلی MVP
+
+در نسخه فعلی، پروژه این قابلیت‌ها را دارد:
+
+- دریافت لینک کانال تلگرام و خواندن پیام‌ها با `Telethon`
+- دانلود و پردازش پیام‌های متنی، صوتی و ویدیویی
+- استخراج صوت از ویدیو با `ffmpeg`
+- تبدیل صوت/ویدیو به متن با OpenAI یا Gemini
+- chunk کردن متن‌ها
+- ساخت embedding برای جستجوی معنایی
+- جستجوی keyword + semantic search
+- پاسخ‌سازی اولیه با RAG از روی نتایج جستجو
+- داشبورد وب سبک با `Python http.server`
+- ربات تلگرام برای orchestration و دستورات اصلی
+- اتصال اکانت واقعی تلگرام کاربر با session string از طریق Telethon
+
+---
 
 ## چرا Bot API کافی نیست؟
 
-اگر بخواهید محتوای یک کانال عمومی دلخواه را ingest کنید، معمولا باید با API سطح کاربر (`MTProto`) کار کنید. در Bot API، بات فقط پیام‌های کانال‌هایی را می‌گیرد که خودش عضو آن‌ها باشد. برای همین این MVP از `Telethon` استفاده می‌کند.
+برای گرفتن آرشیو کامل یک کانال یا چت، Bot API به‌تنهایی کافی نیست. Bot API معمولاً فقط پیام‌های جدیدی را می‌بیند که ربات به آن‌ها دسترسی دارد.
 
-## معماری
+برای import کردن تاریخچه کانال‌ها و چت‌ها، این پروژه از `Telethon` و MTProto استفاده می‌کند؛ یعنی همان سطح دسترسی user account، نه فقط bot token.
 
-- Python `http.server`: API و UI سبک
-- `Telethon`: خواندن پیام‌های کانال عمومی و دانلود media
-- `OpenAI` یا `Gemini`: transcription و embedding
-- JSON file store: ذخیره‌سازی سبک برای MVP
-- Python lexical + cosine search: جست‌وجوی ترکیبی برای MVP
+---
 
-## پیش‌نیازها
-
-- Python 3.11+
-- `ffmpeg` روی سیستم برای استخراج صوت از ویدیو و segment کردن فایل‌های بزرگ
-- Telegram API credentials:
-  - `TELEGRAM_API_ID`
-  - `TELEGRAM_API_HASH`
-  - ترجیحا `TELEGRAM_SESSION_STRING`
-- `TELEGRAM_BOT_TOKEN` اگر می‌خواهید ربات orchestration را هم اجرا کنید
-- `OPENAI_API_KEY` یا `GEMINI_API_KEY`
-
-## نصب
-
-```bash
-cd /Users/mrchatgpt/Sites/telegram-notebooklm-mvp
-uv venv
-source .venv/bin/activate
-uv pip install -e .
-cp .env.example .env
-```
-
-## گرفتن Telegram credentials
-
-1. از [my.telegram.org](https://my.telegram.org) یک `api_id` و `api_hash` بسازید.
-2. برای production بهتر است یک session string بسازید:
-
-```bash
-export TELEGRAM_API_ID=...
-export TELEGRAM_API_HASH=...
-uv run python scripts/create_telegram_session.py
-```
-
-خروجی اسکریپت را در `.env` داخل `TELEGRAM_SESSION_STRING` بگذارید.
-
-3. این MVP اگر `TELEGRAM_SESSION_STRING` نداشته باشد، از session file محلی استفاده می‌کند و در اولین اجرا login تعاملی لازم می‌شود.
-
-## اجرا
-
-```bash
-.venv/bin/python -m telegram_notebook.main
-```
-
-UI روی این آدرس بالا می‌آید:
+## معماری فعلی
 
 ```text
-http://127.0.0.1:8000
+Telegram Bot
+  |
+  | دستورات کاربر: /connect, /ingest, /search, /ask
+  v
+Python Backend
+  |
+  +-- Telethon Client
+  |     خواندن کانال‌ها و چت‌ها
+  |
+  +-- Ingestion Pipeline
+  |     دانلود مدیا، استخراج متن، transcription
+  |
+  +-- Chunking + Embedding
+  |     آماده‌سازی برای semantic search
+  |
+  +-- Search Service
+  |     keyword search + vector search
+  |
+  +-- RAG Answer Generator
+        ساخت پاسخ از روی منابع پیدا شده
 ```
 
-برای اجرای ربات تلگرام:
+---
 
-```bash
-.venv/bin/python -m telegram_notebook.bot
+## تکنولوژی‌ها
+
+- Python 3.11+
+- Telethon
+- OpenAI API
+- Google Gemini / Google GenAI
+- ffmpeg
+- SQLite / JSON-compatible local store برای MVP
+- Python lexical search + cosine similarity
+- Telegram Bot API برای رابط کاربر
+- Web UI سبک با `http.server`
+
+---
+
+## دستورات ربات
+
+```text
+/start
+معرفی پروژه و شروع کار
+
+/connect
+اتصال اکانت واقعی تلگرام کاربر
+
+/status
+بررسی وضعیت اتصال
+
+/ingest <channel_url>
+ایندکس کردن کانال یا منبع تلگرامی
+
+/search <query>
+جستجو در آرشیو
+
+/search <query> --source <channel_url>
+جستجو فقط داخل یک منبع خاص
+
+/ask <question>
+پرسش از آرشیو با AI
+
+/ask <question> --source <channel_url>
+پرسش فقط از یک کانال یا منبع خاص
+
+/sources
+نمایش منابع ایندکس‌شده
+
+/delete <channel_url>
+حذف داده‌های یک منبع
+
+/cancel
+لغو flow فعلی
 ```
 
-## API
+---
 
-### ingest
+## APIهای اصلی
+
+### Ingest Channel
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/channels/ingest \
@@ -88,59 +163,253 @@ curl -X POST http://127.0.0.1:8000/api/channels/ingest \
   }'
 ```
 
-### search
+### Search
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/search \
   -H 'content-type: application/json' \
   -d '{
-    "query": "هوش مصنوعی و مدل زبانی",
+    "query": "هوش مصنوعی و تولید ویدیو",
     "channel_url": "https://t.me/example_channel",
     "top_k": 5
   }'
 ```
 
-### settings
+### Ask AI
 
-- `GET /api/settings`: تنظیمات فعال و وضعیت keyها
-- `POST /api/settings`: ذخیره provider/model/keyها در `.env`
-- `GET /api/models?provider=gemini&capability=transcription`: گرفتن لیست مدل‌ها از provider
+```bash
+curl -X POST http://127.0.0.1:8000/api/ask \
+  -H 'content-type: application/json' \
+  -d '{
+    "query": "از این کانال چه ابزارهایی برای ساخت ویدیو معرفی شده؟",
+    "channel_url": "https://t.me/example_channel"
+  }'
+```
 
-پیش‌فرض فعلی تنظیمات محلی:
+---
 
-- transcription: `gemini-flash-latest`
-- embedding: `gemini-embedding-001`
+## مسیر محصول نهایی
 
-## Bot Commands
+هدف نهایی این پروژه فقط search ساده نیست. مسیر محصول به این شکل است:
 
-- `/start`: معرفی و شروع flow
-- `/connect`: شروع اتصال اکانت واقعی تلگرام
-- `/status`: وضعیت اتصال session
-- `/search <query>`: جست‌وجو در archive
-- `/cancel`: لغو flow جاری
+```text
+Telegram AI Archive
+  |
+  +-- Import کامل کانال‌ها و چت‌ها
+  +-- Forwarded Inbox برای پیام‌های فورواردشده
+  +-- Rule Engine برای جدا کردن محتواها با keyword یا AI
+  +-- Tag / Folder / Collection
+  +-- Search متنی و معنایی
+  +-- NotebookLM داخلی برای پرسش و پاسخ
+  +-- MCP Server برای اتصال به AI tools
+```
 
-Flow اتصال:
+---
 
-1. کاربر در ربات `/connect` می‌زند.
-2. شماره را به‌صورت contact یا متن می‌فرستد.
-3. backend با `Telethon` کد لاگین را به اکانت واقعی می‌فرستد.
-4. کاربر کد را در ربات می‌فرستد.
-5. اگر 2FA فعال باشد، ربات پسورد را می‌گیرد.
-6. `session string` روی backend ذخیره می‌شود.
+## Rule Engine پیشنهادی
 
-## محدودیت‌های MVP
+در نسخه‌های بعدی، کاربر باید بتواند قانون تعریف کند:
 
-- transcription فقط روی mediaهای صوتی/ویدیویی انجام می‌شود.
-- برای فایل‌های خیلی بزرگ، pipeline آن‌ها را به segmentهای کوچک‌تر می‌شکند.
-- storage در این نسخه فایل JSON است. برای دیتاست بزرگ بهتر است `Postgres + pgvector` یا یک vector DB اضافه شود.
-- برای Gemini در این MVP transcription با `generateContent` روی فایل صوتی انجام می‌شود و مدل‌های قابل انتخاب از API provider خوانده می‌شوند.
-- Bot API فقط برای orchestration و مدیریت کاربر استفاده می‌شود؛ خواندن خود کانال‌ها همچنان با `Telethon/MTProto` و اکانت واقعی انجام می‌شود.
-- این پروژه فعلا chat-style answer generation مثل NotebookLM ندارد؛ فقط ingest + search را پیاده می‌کند.
+```text
+/rule add Claude -> AI Tools
+/rule add Al Mouj -> Real Estate
+/rule add golden visa -> Oman Visa
+/rule add قیمت -> Leads
+```
 
-## مسیر توسعه بعدی
+هر محتوای جدیدی که وارد سیستم شود، از نظر متن، کپشن، OCR یا transcript بررسی می‌شود. اگر rule match شد:
 
-- افزودن پاسخ‌ساز RAG روی نتایج search
-- queue/background jobs با Celery یا Dramatiq
-- progress tracking برای ingestهای طولانی
-- multi-channel collections
-- summary generation per post / per channel
+- به tag مربوطه وصل می‌شود
+- در collection جدا قرار می‌گیرد
+- در صورت نیاز به کانال آرشیو کاربر فوروارد می‌شود
+- بعداً در سؤال و جواب قابل فیلتر است
+
+---
+
+## MCP Roadmap
+
+یکی از مسیرهای مهم پروژه، ساخت یک **Telegram MCP Server** است تا آرشیو تلگرام کاربر فقط داخل ربات نماند و بتواند به ابزارهای AI دیگر وصل شود.
+
+ابزارهای پیشنهادی MCP:
+
+```text
+search_telegram_archive
+جستجو در آرشیو تلگرام
+
+ask_telegram_notebook
+پرسش و پاسخ از منابع ذخیره‌شده
+
+list_sources
+نمایش کانال‌ها، چت‌ها و inboxها
+
+list_tags
+نمایش tagها و collectionها
+
+get_message
+دریافت متن کامل یک پیام یا آیتم
+
+summarize_source
+خلاصه‌سازی یک کانال، چت یا collection
+```
+
+در فاز اول، MCP باید read-only باشد. ابزارهای حساس مثل import، forward، delete یا create_rule باید بعداً با permission و confirmation اضافه شوند.
+
+---
+
+## نصب
+
+```bash
+git clone https://github.com/shm379/telegram-notebooklm-mvp.git
+cd telegram-notebooklm-mvp
+
+uv venv
+source .venv/bin/activate
+uv pip install -e .
+cp .env.example .env
+```
+
+روی ویندوز:
+
+```powershell
+uv venv
+.venv\Scripts\activate
+uv pip install -e .
+copy .env.example .env
+```
+
+---
+
+## پیش‌نیازها
+
+- Python 3.11+
+- ffmpeg
+- Telegram API credentials:
+  - `TELEGRAM_API_ID`
+  - `TELEGRAM_API_HASH`
+  - `TELEGRAM_SESSION_STRING` برای اجرای production بهتر است
+- `TELEGRAM_BOT_TOKEN` برای اجرای ربات
+- یکی از این providerها:
+  - `OPENAI_API_KEY`
+  - `GEMINI_API_KEY`
+
+---
+
+## ساخت Telegram Session
+
+```bash
+export TELEGRAM_API_ID=...
+export TELEGRAM_API_HASH=...
+uv run python scripts/create_telegram_session.py
+```
+
+خروجی را در `.env` داخل `TELEGRAM_SESSION_STRING` بگذارید.
+
+اگر `TELEGRAM_SESSION_STRING` نداشته باشید، پروژه از session file محلی استفاده می‌کند و اولین اجرا نیاز به login تعاملی دارد.
+
+---
+
+## اجرای Web UI
+
+```bash
+python -m telegram_notebook.main
+```
+
+سپس باز کنید:
+
+```text
+http://127.0.0.1:8000
+```
+
+---
+
+## اجرای ربات تلگرام
+
+```bash
+python -m telegram_notebook.bot
+```
+
+---
+
+## محدودیت‌های فعلی
+
+- سیستم هنوز برای multi-user production آماده نیست.
+- storage فعلی برای MVP مناسب است، نه دیتاست بزرگ.
+- session string و API keyها باید قبل از production رمزنگاری شوند.
+- import کانال فعلاً batch/job queue کامل ندارد.
+- progress tracking برای ingestهای طولانی هنوز کامل نیست.
+- forwarded inbox و rule engine هنوز باید به شکل کامل اضافه شوند.
+- برای دیتاست بزرگ بهتر است به PostgreSQL + pgvector یا Qdrant مهاجرت شود.
+
+---
+
+## نکات امنیتی مهم
+
+- هیچ token، API key، session string یا credential واقعی را داخل repo commit نکنید.
+- اگر قبلاً token واقعی داخل `.env.example` یا history پروژه commit شده، آن token را فوراً revoke/regenerate کنید.
+- برای production، session کاربران باید encrypt شود.
+- برای هر search یا ask باید فیلتر user_id اعمال شود.
+- کاربر باید امکان `disconnect` و `delete my data` داشته باشد.
+- ابزارهای MCP در ابتدا باید read-only باشند.
+
+---
+
+## Roadmap پیشنهادی
+
+### Phase 1 — Stabilize Core
+
+- پاکسازی secrets از repo
+- اصلاح README و env example
+- پایدارسازی `/connect`, `/ingest`, `/search`, `/ask`
+- اصلاح error handling و logging
+
+### Phase 2 — Multi-user Data Model
+
+- اضافه کردن user_id به sources, messages, media, chunks
+- جداسازی کامل دیتای کاربران
+- permission و access control
+
+### Phase 3 — Forwarded Inbox
+
+- پردازش پیام‌های فورواردشده
+- ذخیره text, caption, media, document
+- OCR برای عکس‌ها
+- استخراج متن از PDF/DOCX/Excel
+
+### Phase 4 — Rules + Tags
+
+- تعریف keyword rule
+- tag و collection
+- forward اتومات به کانال‌های آرشیو
+- ruleهای AI-based
+
+### Phase 5 — Full Import Jobs
+
+- import کامل کانال از اول تا آخر
+- resume بعد از قطع شدن
+- progress tracking
+- queue/background worker
+
+### Phase 6 — NotebookLM داخلی
+
+- پاسخ‌سازی بهتر با منبع
+- summary per source
+- summary per tag
+- timeline و topic clustering
+
+### Phase 7 — MCP Server
+
+- read-only MCP tools
+- اتصال به AI clients
+- ابزارهای search, ask, list_sources, get_message
+
+---
+
+## خلاصه
+
+Telegram NotebookLM MVP تلاش می‌کند تلگرام را به یک حافظه هوشمند تبدیل کند؛ جایی که کاربر بتواند کانال‌ها، چت‌ها و پیام‌های فورواردی خود را ذخیره کند، با keyword یا semantic search داخل آن‌ها بگردد، محتواها را با rule جدا کند و در نهایت مثل NotebookLM از آرشیو خودش سؤال بپرسد.
+
+این پروژه پایه‌ای برای ساخت یک محصول بزرگ‌تر است:
+
+```text
+Telegram Memory for AI Assistants
+```
