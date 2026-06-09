@@ -127,6 +127,49 @@ def test_migrates_legacy_channels_table_without_owner_id(tmp_path):
     assert len(repo.list_channels(owner_id=1)) == 1
 
 
+def test_secrets_are_encrypted_at_rest(tmp_path, monkeypatch):
+    monkeypatch.setenv("SECRETS_KEY", "unit-test-key")
+    repo = _repo(tmp_path)
+    repo.upsert_bot_user(bot_user_id=9, chat_id=9, username="u", first_name="f")
+    repo.save_bot_user_session(bot_user_id=9, phone="+100", api_id=1, api_hash="HASH", session_string="SESS", connected_at="now")
+    repo.update_user_gemini_key(bot_user_id=9, api_key="GKEY")
+
+    # Raw storage is ciphertext, not the plaintext secret.
+    with sqlite3.connect(tmp_path / "store.db") as conn:
+        row = conn.execute(
+            "SELECT api_hash, session_string, gemini_api_key, phone FROM bot_users WHERE bot_user_id = 9"
+        ).fetchone()
+    assert row[0].startswith("enc::") and "HASH" not in row[0]
+    assert row[1].startswith("enc::") and "SESS" not in row[1]
+    assert row[2].startswith("enc::") and "GKEY" not in row[2]
+    assert row[3] == "+100"  # phone is not a credential; stored as-is
+
+    # The repository transparently decrypts on read.
+    user = repo.get_bot_user(bot_user_id=9)
+    assert user["api_hash"] == "HASH"
+    assert user["session_string"] == "SESS"
+    assert user["gemini_api_key"] == "GKEY"
+
+
+def test_auth_flow_secrets_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setenv("SECRETS_KEY", "unit-test-key")
+    repo = _repo(tmp_path)
+    repo.upsert_auth_flow(
+        bot_user_id=3, chat_id=3, phone="+1", api_id=5, api_hash="AH",
+        session_string="SS", phone_code_hash="PCH", status="awaiting_code",
+    )
+    with sqlite3.connect(tmp_path / "store.db") as conn:
+        raw = conn.execute(
+            "SELECT api_hash, session_string, phone_code_hash FROM auth_flows WHERE bot_user_id = 3"
+        ).fetchone()
+    assert all(v.startswith("enc::") for v in raw)
+
+    flow = repo.get_auth_flow(bot_user_id=3)
+    assert flow["api_hash"] == "AH"
+    assert flow["session_string"] == "SS"
+    assert flow["phone_code_hash"] == "PCH"
+
+
 def test_disconnect_bot_user(tmp_path):
     repo = _repo(tmp_path)
     repo.upsert_bot_user(bot_user_id=7, chat_id=7, username="u", first_name="f")

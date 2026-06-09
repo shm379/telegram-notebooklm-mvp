@@ -6,6 +6,22 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from .crypto import decrypt as _decrypt, encrypt as _encrypt
+
+
+# Columns holding secrets that are encrypted at rest (see crypto.py).
+_BOT_USER_SECRETS = ("api_hash", "session_string", "gemini_api_key")
+_AUTH_FLOW_SECRETS = ("api_hash", "session_string", "phone_code_hash")
+
+
+def _decrypt_row(row: dict[str, Any] | None, keys: tuple[str, ...]) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    for key in keys:
+        if key in row:
+            row[key] = _decrypt(row[key])
+    return row
+
 
 def connect(db_path: Path) -> Path:
     path = Path(db_path)
@@ -359,14 +375,14 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 """, (bot_user_id, chat_id, username, first_name))
                 conn.commit()
                 conn.row_factory = sqlite3.Row
-                return dict(conn.execute("SELECT * FROM bot_users WHERE bot_user_id = ?", (bot_user_id,)).fetchone())
+                return _decrypt_row(dict(conn.execute("SELECT * FROM bot_users WHERE bot_user_id = ?", (bot_user_id,)).fetchone()), _BOT_USER_SECRETS)
 
     def get_bot_user(self, *, bot_user_id: int) -> dict[str, Any] | None:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
                 res = conn.execute("SELECT * FROM bot_users WHERE bot_user_id = ?", (bot_user_id,)).fetchone()
-                return dict(res) if res else None
+                return _decrypt_row(dict(res), _BOT_USER_SECRETS) if res else None
 
     def disconnect_bot_user(self, *, bot_user_id: int) -> bool:
         """Remove a user's session and credentials. Returns True if a session existed."""
@@ -404,12 +420,12 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                     UPDATE bot_users SET phone=?, api_id=?, api_hash=?, session_string=?, connected_at=?,
                                        vertex_project_id=?, vertex_region=?, vertex_index_id=?, vertex_endpoint_id=?, vertex_deployed_index_id=?
                     WHERE bot_user_id=?
-                """, (phone, api_id, api_hash, session_string, connected_at, v_project, v_region, v_index, v_endpoint, v_deployed, bot_user_id))
+                """, (phone, api_id, _encrypt(api_hash), _encrypt(session_string), connected_at, v_project, v_region, v_index, v_endpoint, v_deployed, bot_user_id))
 
     def update_user_gemini_key(self, *, bot_user_id: int, api_key: str) -> None:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
-                conn.execute("UPDATE bot_users SET gemini_api_key = ? WHERE bot_user_id = ?", (api_key, bot_user_id))
+                conn.execute("UPDATE bot_users SET gemini_api_key = ? WHERE bot_user_id = ?", (_encrypt(api_key), bot_user_id))
 
     def update_user_models(self, bot_user_id: int, transcription_model: str, embedding_model: str) -> None:
         with self.lock:
@@ -431,10 +447,10 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                         vertex_project_id=excluded.vertex_project_id, vertex_region=excluded.vertex_region,
                         vertex_index_id=excluded.vertex_index_id, vertex_endpoint_id=excluded.vertex_endpoint_id,
                         vertex_deployed_index_id=excluded.vertex_deployed_index_id
-                """, (bot_user_id, chat_id, phone, api_id, api_hash, session_string, phone_code_hash, status, v_project, v_region, v_index, v_endpoint, v_deployed))
+                """, (bot_user_id, chat_id, phone, api_id, _encrypt(api_hash), _encrypt(session_string), _encrypt(phone_code_hash), status, v_project, v_region, v_index, v_endpoint, v_deployed))
                 conn.commit()
                 conn.row_factory = sqlite3.Row
-                return dict(conn.execute("SELECT * FROM auth_flows WHERE bot_user_id = ?", (bot_user_id,)).fetchone())
+                return _decrypt_row(dict(conn.execute("SELECT * FROM auth_flows WHERE bot_user_id = ?", (bot_user_id,)).fetchone()), _AUTH_FLOW_SECRETS)
 
     def update_auth_flow_status(self, *, bot_user_id: int, status: str) -> None:
         with self.lock:
@@ -446,7 +462,7 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
                 res = conn.execute("SELECT * FROM auth_flows WHERE bot_user_id = ?", (bot_user_id,)).fetchone()
-                return dict(res) if res else None
+                return _decrypt_row(dict(res), _AUTH_FLOW_SECRETS) if res else None
 
     def clear_auth_flow(self, *, bot_user_id: int) -> None:
         with self.lock:

@@ -1,5 +1,28 @@
 # Changelog
 
+## Phase 3 — Web API Auth & Secret Encryption (2026-06-09)
+
+دو مورد امنیتی باقی‌مانده از تحلیل: احراز هویت Web API و رمزنگاری secrets در دیتابیس.
+
+### Web API authentication
+- متغیر جدید `WEB_API_TOKEN`. وقتی تنظیم شده باشد، همه‌ی endpointهای `/api/*` (به‌جز `/api/health`) به توکن نیاز دارند؛ توکن از طریق `Authorization: Bearer <token>` یا هدر `X-API-Token` ارسال می‌شود (مقایسه‌ی constant-time).
+- وقتی توکن تنظیم نشده باشد، API فقط درخواست‌های loopback (localhost) را می‌پذیرد و دسترسی شبکه‌ای بدون احراز هویت با ۴۰۱ رد می‌شود (secure-by-default؛ پیش‌تر کاملاً باز بود).
+- `/api/health` برای healthcheck داکر عمومی می‌ماند.
+- UI داشبورد: همه‌ی فراخوانی‌ها از `fetchJson` عبور می‌کنند؛ این تابع توکن را از `localStorage` می‌فرستد و در پاسخ ۴۰۱ یک‌بار از کاربر توکن می‌پرسد و ذخیره می‌کند.
+
+### Secret encryption at rest
+- ماژول جدید `crypto.py`: رمزنگاری authenticated فقط با کتابخانه‌ی استاندارد (جداسازی کلید با HKDF-SHA256، keystream با HMAC-SHA256 در حالت CTR، و Encrypt-then-MAC با HMAC-SHA256؛ nonce تصادفی ۱۲۸ بیتی برای هر مقدار). بدون هیچ وابستگی جدید.
+- ستون‌های حساس قبل از ذخیره در SQLite رمز می‌شوند: در `bot_users` → `api_hash`, `session_string`, `gemini_api_key`؛ در `auth_flows` → `api_hash`, `session_string`, `phone_code_hash`. خواندن (`get_bot_user`/`get_auth_flow`) به‌صورت شفاف رمزگشایی می‌کند.
+- کلید از `SECRETS_KEY` خوانده می‌شود. اگر تنظیم نشده باشد، رمزنگاری no-op است (با هشدار) و دیتابیس‌های plaintext قدیمی همچنان کار می‌کنند؛ مقادیر رمزشده با پیشوند `enc::` از plaintext قدیمی تفکیک می‌شوند تا مهاجرت بدون دردسر باشد.
+
+### Tests
+- `tests/test_crypto.py`: roundtrip، non-determinism، رد tampering/کلید اشتباه، passthrough برای None/خالی/plaintext قدیمی، و رفتار no-op بدون کلید.
+- `tests/test_web_auth.py`: پذیرش bearer/`X-API-Token`، رد توکن غلط/نبود توکن، و محدودیت loopback وقتی توکن تنظیم نشده.
+- `tests/test_db.py`: تست‌های جدید برای ذخیره‌ی رمزشده‌ی secrets و رمزگشایی شفاف هنگام خواندن.
+
+### .env.example
+- افزوده‌شدن `WEB_API_TOKEN` و `SECRETS_KEY` همراه با دستور تولید مقدار.
+
 ## Phase 2 — Per-user Data Isolation (2026-06-09)
 
 تمرکز این فاز روی رفع نشت داده بین کاربران است: تا پیش از این `/search` و `/ask` (و Web API) روی **همه‌ی** کانال‌های دیتابیس کار می‌کردند و کاربران دیتای یکدیگر را می‌دیدند.
