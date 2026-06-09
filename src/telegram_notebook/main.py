@@ -21,6 +21,11 @@ from .transcription import TranscriptionService
 
 logger = logging.getLogger(__name__)
 
+# The web dashboard has no per-user login, so all of its data lives under a
+# single fixed owner id. This keeps the dashboard's archive isolated from the
+# per-user (bot_user_id) archives created through the Telegram bot.
+WEB_OWNER_ID = 0
+
 
 @dataclass(slots=True)
 class RuntimeConfig:
@@ -602,7 +607,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             try:
                 stats = asyncio.run(
-                    state.pipeline.ingest_channel(channel_url=channel_url, limit=limit)
+                    state.pipeline.ingest_channel(owner_id=WEB_OWNER_ID, channel_url=channel_url, limit=limit)
                 )
                 self._send_json(
                     {
@@ -627,6 +632,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             try:
                 results = state.search_service.search(
+                    owner_id=WEB_OWNER_ID,
                     query=query,
                     channel_url=str(channel_url).strip() if channel_url else None,
                     top_k=top_k,
@@ -653,6 +659,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 vertex_config = state.vertex_search_config()
                 # 1. Search for relevant chunks
                 results = state.search_service.search(
+                    owner_id=WEB_OWNER_ID,
                     query=query,
                     channel_url=str(channel_url).strip() if channel_url else None,
                     top_k=5,

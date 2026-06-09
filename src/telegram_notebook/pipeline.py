@@ -41,6 +41,7 @@ class IngestionPipeline:
     async def ingest_channel(
         self,
         *,
+        owner_id: int,
         channel_url: str,
         limit: int,
         api_id: int | None = None,
@@ -67,6 +68,7 @@ class IngestionPipeline:
         async with client:
             channel = await fetch_channel_info(client, channel_url)
             channel_id = self.repository.upsert_channel(
+                owner_id=owner_id,
                 telegram_id=channel.telegram_id,
                 channel_url=channel.canonical_url,
                 title=channel.title,

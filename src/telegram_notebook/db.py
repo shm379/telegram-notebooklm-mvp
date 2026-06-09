@@ -65,8 +65,9 @@ class Repository:
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS channels (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER,
                         telegram_id INTEGER,
-                        channel_url TEXT UNIQUE,
+                        channel_url TEXT,
                         channel_title TEXT,
                         channel_username TEXT
                     )
@@ -148,20 +149,56 @@ class Repository:
                         vertex_deployed_index_id TEXT
                     )
                 """)
+                self._ensure_channel_owner(conn)
                 conn.commit()
 
-    def upsert_channel(self, *, telegram_id: int, channel_url: str, title: str | None, username: str | None) -> int:
+    @staticmethod
+    def _ensure_channel_owner(conn: sqlite3.Connection) -> None:
+        """Migrate older databases to per-user channel ownership.
+
+        Adds the ``owner_id`` column and replaces the global ``UNIQUE(channel_url)``
+        constraint with a composite ``UNIQUE(owner_id, channel_url)`` index so that
+        two users can independently ingest the same channel URL without sharing rows.
+        Legacy rows (created before ownership existed) keep ``owner_id = NULL`` and are
+        therefore invisible to per-user queries rather than leaking across users.
+        """
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(channels)").fetchall()]
+        if "owner_id" not in cols:
+            conn.execute("ALTER TABLE channels RENAME TO channels_legacy")
+            conn.execute("""
+                CREATE TABLE channels (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_id INTEGER,
+                    telegram_id INTEGER,
+                    channel_url TEXT,
+                    channel_title TEXT,
+                    channel_username TEXT
+                )
+            """)
+            conn.execute("""
+                INSERT INTO channels (id, owner_id, telegram_id, channel_url, channel_title, channel_username)
+                SELECT id, NULL, telegram_id, channel_url, channel_title, channel_username FROM channels_legacy
+            """)
+            conn.execute("DROP TABLE channels_legacy")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_owner_url ON channels(owner_id, channel_url)"
+        )
+
+    def upsert_channel(self, *, owner_id: int, telegram_id: int, channel_url: str, title: str | None, username: str | None) -> int:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.execute("""
-                    INSERT INTO channels (telegram_id, channel_url, channel_title, channel_username)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(channel_url) DO UPDATE SET
+                    INSERT INTO channels (owner_id, telegram_id, channel_url, channel_title, channel_username)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(owner_id, channel_url) DO UPDATE SET
                         telegram_id=excluded.telegram_id,
                         channel_title=excluded.channel_title,
                         channel_username=excluded.channel_username
-                """, (telegram_id, channel_url, title, username))
-                res = conn.execute("SELECT id FROM channels WHERE channel_url = ?", (channel_url,)).fetchone()
+                """, (owner_id, telegram_id, channel_url, title, username))
+                res = conn.execute(
+                    "SELECT id FROM channels WHERE owner_id = ? AND channel_url = ?",
+                    (owner_id, channel_url),
+                ).fetchone()
                 return res[0]
 
     def create_or_get_message(self, *, channel_id: int, telegram_message_id: int, message_date: str | None, message_url: str | None, caption: str | None) -> int:
@@ -223,7 +260,7 @@ class Repository:
                 res = conn.execute("SELECT transcript_status FROM media_items WHERE id = ?", (media_item_id,)).fetchone()
                 return res and res[0] == 'done'
 
-    def keyword_candidates(self, *, query: str, top_k: int, channel_url: str | None) -> list[dict[str, Any]]:
+    def keyword_candidates(self, *, owner_id: int, query: str, top_k: int, channel_url: str | None) -> list[dict[str, Any]]:
         # جستجوی متنی سریع در SQLite
         with self.lock:
             with sqlite3.connect(self.path) as conn:
@@ -234,17 +271,17 @@ class Repository:
                     JOIN media_items mi ON c.media_item_id = mi.id
                     JOIN messages m ON mi.message_id = m.id
                     JOIN channels ch ON m.channel_id = ch.id
-                    WHERE c.text LIKE ?
+                    WHERE ch.owner_id = ? AND c.text LIKE ?
                 """
-                params = [f"%{query}%"]
+                params: list[Any] = [owner_id, f"%{query}%"]
                 if channel_url:
                     sql += " AND ch.channel_url = ?"
                     params.append(channel_url)
-                
-                rows = conn.execute(sql + f" LIMIT {top_k}", params).fetchall()
+
+                rows = conn.execute(sql + " LIMIT ?", params + [top_k]).fetchall()
                 return [dict(r) for r in rows]
 
-    def embedding_candidates(self, *, channel_url: str | None) -> list[dict[str, Any]]:
+    def embedding_candidates(self, *, owner_id: int, channel_url: str | None) -> list[dict[str, Any]]:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -255,13 +292,13 @@ class Repository:
                     JOIN media_items mi ON c.media_item_id = mi.id
                     JOIN messages m ON mi.message_id = m.id
                     JOIN channels ch ON m.channel_id = ch.id
-                    WHERE c.embedding IS NOT NULL
+                    WHERE c.embedding IS NOT NULL AND ch.owner_id = ?
                 """
-                params = []
+                params: list[Any] = [owner_id]
                 if channel_url:
                     sql += " AND ch.channel_url = ?"
                     params.append(channel_url)
-                
+
                 rows = conn.execute(sql, params).fetchall()
                 results = []
                 for r in rows:
@@ -271,16 +308,21 @@ class Repository:
                     results.append(d)
                 return results
 
-    def list_channels(self) -> list[dict[str, Any]]:
+    def list_channels(self, *, owner_id: int) -> list[dict[str, Any]]:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
-                return [dict(r) for r in conn.execute("SELECT * FROM channels").fetchall()]
+                return [dict(r) for r in conn.execute(
+                    "SELECT * FROM channels WHERE owner_id = ?", (owner_id,)
+                ).fetchall()]
 
-    def delete_channel_data(self, *, channel_url: str) -> bool:
+    def delete_channel_data(self, *, owner_id: int, channel_url: str) -> bool:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
-                res = conn.execute("SELECT id FROM channels WHERE channel_url = ?", (channel_url,)).fetchone()
+                res = conn.execute(
+                    "SELECT id FROM channels WHERE owner_id = ? AND channel_url = ?",
+                    (owner_id, channel_url),
+                ).fetchone()
                 if not res: return False
                 cid = res[0]
                 conn.execute("DELETE FROM chunks WHERE media_item_id IN (SELECT id FROM media_items WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?))", (cid,))
@@ -290,7 +332,7 @@ class Repository:
                 conn.commit()
                 return True
 
-    def get_chunk_by_media_and_index(self, media_item_id: int, chunk_index: int) -> dict[str, Any] | None:
+    def get_chunk_by_media_and_index(self, *, owner_id: int, media_item_id: int, chunk_index: int) -> dict[str, Any] | None:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -301,8 +343,8 @@ class Repository:
                     JOIN media_items mi ON c.media_item_id = mi.id
                     JOIN messages m ON mi.message_id = m.id
                     JOIN channels ch ON m.channel_id = ch.id
-                    WHERE c.media_item_id = ? AND c.chunk_index = ?
-                """, (media_item_id, chunk_index)).fetchone()
+                    WHERE c.media_item_id = ? AND c.chunk_index = ? AND ch.owner_id = ?
+                """, (media_item_id, chunk_index, owner_id)).fetchone()
                 return dict(row) if row else None
 
     def upsert_bot_user(

@@ -332,7 +332,7 @@ python -m telegram_notebook.bot
 
 ## محدودیت‌های فعلی
 
-- سیستم هنوز برای multi-user production آماده نیست.
+- جداسازی داده بین کاربران انجام شده است (هر کاربر فقط دیتای خودش را می‌بیند؛ مالکیت با `owner_id` روی کانال‌ها اعمال می‌شود)، اما هنوز احراز هویت روی Web API و رمزنگاری secrets در دیتابیس اضافه نشده؛ برای multi-user production این دو لازم است.
 - storage فعلی برای MVP مناسب است، نه دیتاست بزرگ.
 - session string و API keyها باید قبل از production رمزنگاری شوند.
 - import کانال فعلاً batch/job queue کامل ندارد.

@@ -251,9 +251,9 @@ class NotebookBot:
         elif command == "/ingest":
             self._handle_ingest(chat_id, bot_user_id, text.removeprefix("/ingest").strip())
         elif command == "/sources":
-            self._handle_sources(chat_id)
+            self._handle_sources(chat_id, bot_user_id)
         elif command == "/delete":
-            self._handle_delete(chat_id, text.removeprefix("/delete").strip())
+            self._handle_delete(chat_id, bot_user_id, text.removeprefix("/delete").strip())
         else:
             self.services.api.send_message(chat_id=chat_id, text="Unknown command. Send /help to see what I can do.")
 
@@ -296,7 +296,7 @@ class NotebookBot:
         vertex_ready = bool(
             (user.get("vertex_project_id") if user else None) or self.services.settings.vertex_project_id
         )
-        sources_count = len(self.services.repository.list_channels())
+        sources_count = len(self.services.repository.list_channels(owner_id=bot_user_id))
         lines = [
             "<b>Status</b>",
             f"• Account linked: {'✅ yes' if connected else '❌ no (use /connect)'}",
@@ -448,7 +448,7 @@ class NotebookBot:
         vertex_config = self._vertex_search_config(user)
         try:
             results = self._search_service_for_user(user).search(
-                query=query, channel_url=source, top_k=5, vertex_config=vertex_config
+                owner_id=bot_user_id, query=query, channel_url=source, top_k=5, vertex_config=vertex_config
             )
         except Exception:
             logger.exception("Search failed for user %s", bot_user_id)
@@ -473,7 +473,7 @@ class NotebookBot:
         self.services.api.send_message(chat_id=chat_id, text="AI Brain is thinking...")
         try:
             search_service = self._search_service_for_user(user)
-            results = search_service.search(query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
+            results = search_service.search(owner_id=bot_user_id, query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
             answer = search_service.generate_answer(
                 query=query,
                 results=results,
@@ -491,18 +491,18 @@ class NotebookBot:
             sources_text = "\n".join([f"- {r.channel_title or r.channel_url} ({r.message_url})" for r in results[:3]])
             self.services.api.send_message(chat_id=chat_id, text=f"<b>Sources:</b>\n{sources_text}", disable_web_page_preview=True)
 
-    def _handle_sources(self, chat_id: int) -> None:
-        ch = self.services.repository.list_channels()
+    def _handle_sources(self, chat_id: int, bot_user_id: int) -> None:
+        ch = self.services.repository.list_channels(owner_id=bot_user_id)
         if not ch:
             self.services.api.send_message(chat_id, "No sources indexed.")
         else:
             self.services.api.send_message(chat_id, "\n".join([f"{c.get('channel_title') or 'Unknown'}: {c['channel_url']}" for c in ch]))
 
-    def _handle_delete(self, chat_id: int, link: str) -> None:
+    def _handle_delete(self, chat_id: int, bot_user_id: int, link: str) -> None:
         if not link:
             self.services.api.send_message(chat_id, "Usage: /delete <channel_url>")
             return
-        if self.services.repository.delete_channel_data(channel_url=link):
+        if self.services.repository.delete_channel_data(owner_id=bot_user_id, channel_url=link):
             self.services.api.send_message(chat_id, "Deleted.")
         else:
             self.services.api.send_message(chat_id, "Not found.")
@@ -560,6 +560,7 @@ class NotebookBot:
                 embeddings=self._embedding_service_for_user(user),
             )
             stats = await pipeline.ingest_channel(
+                owner_id=bot_user_id,
                 channel_url=link,
                 limit=100,
                 api_id=user.get("api_id"),

@@ -58,13 +58,14 @@ class SearchService:
     def search(
         self,
         *,
+        owner_id: int,
         query: str,
         channel_url: str | None = None,
         top_k: int = 5,
         vertex_config: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
         if not self.embeddings.enabled:
-            rows = self.repository.keyword_candidates(query=query, top_k=top_k, channel_url=channel_url)
+            rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url)
             return [SearchResult(score=1.0, **r) for r in rows]
 
         v_proj = vertex_config.get("project_id") if vertex_config else None
@@ -80,7 +81,7 @@ class SearchService:
             logger.warning("Embedding query failed; falling back to keyword search", exc_info=True)
             query_vector = None
         if not query_vector:
-            rows = self.repository.keyword_candidates(query=query, top_k=top_k, channel_url=channel_url)
+            rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url)
             return [SearchResult(score=1.0, **r) for r in rows]
 
         if vertex_config and vertex_config.get("index_endpoint_id"):
@@ -104,7 +105,9 @@ class SearchService:
                     if len(id_parts) >= 3:
                         media_item_id = int(id_parts[1])
                         chunk_index = int(id_parts[2])
-                        chunk = self.repository.get_chunk_by_media_and_index(media_item_id, chunk_index)
+                        chunk = self.repository.get_chunk_by_media_and_index(
+                            owner_id=owner_id, media_item_id=media_item_id, chunk_index=chunk_index
+                        )
                         if chunk:
                             # Avoid duplicates based on message_url
                             if chunk["message_url"] in seen_messages:
@@ -129,7 +132,7 @@ class SearchService:
                 logger.exception("Vertex AI search failed; falling back to keyword search")
 
         # Fallback to keyword search for now
-        rows = self.repository.keyword_candidates(query=query, top_k=top_k, channel_url=channel_url)
+        rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url)
         return [SearchResult(score=1.0, 
                              channel_title=r.get("channel_title"),
                              channel_url=r.get("channel_url"),

@@ -1,5 +1,28 @@
 # Changelog
 
+## Phase 2 — Per-user Data Isolation (2026-06-09)
+
+تمرکز این فاز روی رفع نشت داده بین کاربران است: تا پیش از این `/search` و `/ask` (و Web API) روی **همه‌ی** کانال‌های دیتابیس کار می‌کردند و کاربران دیتای یکدیگر را می‌دیدند.
+
+### Data model
+- ستون `owner_id` به جدول `channels` اضافه شد و مالکیت در همین سطح اعمال می‌شود؛ چون هر `message`/`media_item`/`chunk` از طریق FK به یک کانال وصل است، فیلتر روی `channels.owner_id` در joinها داده را به‌طور کامل ایزوله می‌کند.
+- قید سراسری `UNIQUE(channel_url)` با ایندکس ترکیبی `UNIQUE(owner_id, channel_url)` جایگزین شد تا دو کاربر بتوانند مستقل از هم یک کانال یکسان را ingest کنند بدون اینکه ردیف مشترک شوند.
+- مهاجرت خودکار (`Repository._ensure_channel_owner`) برای دیتابیس‌های قدیمی: جدول `channels` بازسازی می‌شود، ستون `owner_id` اضافه می‌گردد و ردیف‌های legacy با `owner_id = NULL` می‌مانند؛ یعنی به‌جای نشت بین کاربران، برای کوئری‌های per-user نامرئی می‌شوند (در صورت نیاز باید دوباره ingest شوند).
+
+### Scope enforcement
+- متدهای repository که داده برمی‌گردانند یا حذف می‌کنند حالا `owner_id` می‌گیرند: `upsert_channel`, `keyword_candidates`, `embedding_candidates`, `list_channels`, `delete_channel_data`, `get_chunk_by_media_and_index`.
+- `SearchService.search` و `IngestionPipeline.ingest_channel` پارامتر `owner_id` می‌گیرند.
+- ربات تلگرام `bot_user_id` کاربر را به‌عنوان `owner_id` پاس می‌دهد؛ بنابراین `/search`, `/ask`, `/ingest`, `/sources`, `/delete`, `/status` فقط روی دیتای همان کاربر کار می‌کنند.
+- داشبورد وب (که login per-user ندارد) از یک `WEB_OWNER_ID = 0` ثابت استفاده می‌کند تا آرشیو آن از آرشیو کاربران ربات جدا بماند.
+
+### Hardening
+- `LIMIT` در `keyword_candidates` به‌جای string-interpolation حالا با پارامتر bind می‌شود.
+
+### Tests
+- تست‌های `Repository` برای پاس‌دادن `owner_id` به‌روزرسانی شدند.
+- تست جدید `test_data_is_isolated_per_owner`: دو کاربر با یک URL یکسان دیتای هم را نمی‌بینند و حذف یکی روی دیگری اثر ندارد.
+- تست جدید `test_migrates_legacy_channels_table_without_owner_id`: مهاجرت دیتابیس قدیمی بدون `owner_id`.
+
 ## Phase 1 — Stabilize Core (2026-06-08)
 
 تمرکز این فاز طبق Roadmap داخل README روی پایدارسازی هسته است: امنیت، رفع باگ، دستورهای ربات، logging و تست.
