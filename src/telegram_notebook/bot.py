@@ -190,11 +190,16 @@ class NotebookBot:
             return
 
         text = str(message.get("text", "")).strip()
-        if not text:
-            return
 
         if text.startswith("/"):
             self._handle_command(chat_id, bot_user_id, text)
+            return
+
+        if self._is_forwarded(message):
+            self._handle_forwarded(chat_id, bot_user_id, message)
+            return
+
+        if not text:
             return
 
         flow = self.services.repository.get_auth_flow(bot_user_id=bot_user_id)
@@ -270,6 +275,7 @@ class NotebookBot:
             text=(
                 "Welcome! I'm your AI Research Assistant.\n"
                 "Use /connect to link your account and configure Vertex AI.\n"
+                "Forward me any message to save it to your searchable inbox.\n"
                 "Send /help to see all commands."
             ),
         )
@@ -285,7 +291,10 @@ class NotebookBot:
             "/ask &lt;question&gt; [--source &lt;url&gt;] — ask the AI over your archive\n"
             "/sources — list indexed sources\n"
             "/delete &lt;channel_url&gt; — delete a source's data\n"
-            "/cancel — cancel the current flow"
+            "/cancel — cancel the current flow\n\n"
+            "<b>Forwarded Inbox</b>\n"
+            "Forward any message to me and I'll save its text/caption to your "
+            "searchable inbox. Then use /search or /ask over it."
         )
         self.services.api.send_message(chat_id=chat_id, text=help_text)
 
@@ -440,6 +449,129 @@ class NotebookBot:
             }
         return None
 
+    def _vertex_ingest_config(self, user: dict | None) -> dict | None:
+        """Build a Vertex AI upsert config (used while indexing) from per-user data."""
+        s = self.services.settings
+        v_project = (user.get("vertex_project_id") if user else None) or s.vertex_project_id
+        v_region = (user.get("vertex_region") if user else None) or s.vertex_region
+        v_index_id = (user.get("vertex_index_id") if user else None) or s.vertex_index_id
+        if v_project and v_region and v_index_id:
+            return {
+                "api_key": (user.get("gemini_api_key") if user else None) or s.gemini_api_key,
+                "project_id": v_project,
+                "region": v_region,
+                "index_id": v_index_id,
+            }
+        return None
+
+    @staticmethod
+    def _is_forwarded(message: dict) -> bool:
+        return any(
+            key in message
+            for key in ("forward_origin", "forward_from", "forward_from_chat", "forward_sender_name", "forward_date")
+        )
+
+    @staticmethod
+    def _forward_source_label(message: dict) -> str:
+        origin = message.get("forward_origin")
+        if isinstance(origin, dict):
+            otype = origin.get("type")
+            if otype == "user":
+                u = origin.get("sender_user") or {}
+                name = " ".join(p for p in (u.get("first_name"), u.get("last_name")) if p)
+                return name or u.get("username") or "Unknown user"
+            if otype == "hidden_user":
+                return origin.get("sender_user_name") or "Hidden user"
+            if otype == "chat":
+                c = origin.get("sender_chat") or {}
+                return c.get("title") or c.get("username") or "Unknown chat"
+            if otype == "channel":
+                c = origin.get("chat") or {}
+                return c.get("title") or c.get("username") or "Unknown channel"
+        ffc = message.get("forward_from_chat")
+        if isinstance(ffc, dict):
+            return ffc.get("title") or ffc.get("username") or "Unknown chat"
+        ff = message.get("forward_from")
+        if isinstance(ff, dict):
+            name = " ".join(p for p in (ff.get("first_name"), ff.get("last_name")) if p)
+            return name or ff.get("username") or "Unknown user"
+        if message.get("forward_sender_name"):
+            return str(message["forward_sender_name"])
+        return "Forwarded"
+
+    @staticmethod
+    def _forward_message_url(message: dict) -> str | None:
+        """Public t.me link when the forward came from a public channel, else None."""
+        origin = message.get("forward_origin")
+        if isinstance(origin, dict) and origin.get("type") == "channel":
+            chat = origin.get("chat") or {}
+            if chat.get("username") and origin.get("message_id"):
+                return f"https://t.me/{chat['username']}/{origin['message_id']}"
+        ffc = message.get("forward_from_chat")
+        if isinstance(ffc, dict) and ffc.get("username") and message.get("forward_from_message_id"):
+            return f"https://t.me/{ffc['username']}/{message['forward_from_message_id']}"
+        return None
+
+    @staticmethod
+    def _forward_media_tag(message: dict) -> str | None:
+        if "photo" in message:
+            return "[Forwarded photo]"
+        if "document" in message:
+            name = (message.get("document") or {}).get("file_name")
+            return f"[Forwarded document: {name}]" if name else "[Forwarded document]"
+        if "video" in message:
+            return "[Forwarded video]"
+        if "audio" in message:
+            audio = message.get("audio") or {}
+            title = audio.get("title") or audio.get("file_name")
+            return f"[Forwarded audio: {title}]" if title else "[Forwarded audio]"
+        if "voice" in message:
+            return "[Forwarded voice message]"
+        return None
+
+    def _handle_forwarded(self, chat_id: int, bot_user_id: int, message: dict) -> None:
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        label = self._forward_source_label(message)
+        raw_text = str(message.get("text") or message.get("caption") or "").strip()
+        media_tag = self._forward_media_tag(message)
+        body = "\n".join(part for part in (media_tag, raw_text) if part).strip()
+        if not body:
+            self.services.api.send_message(
+                chat_id,
+                "I couldn't extract any text from that forward yet. Media-only items "
+                "(photos or files without a caption) aren't indexed in this version.",
+            )
+            return
+
+        forward_key = int(message["message_id"])
+        message_url = self._forward_message_url(message)
+        vertex_config = self._vertex_ingest_config(user)
+
+        async def _do():
+            pipeline = IngestionPipeline(
+                settings=self.services.settings,
+                repository=self.services.repository,
+                transcription=self._transcription_service_for_user(user),
+                embeddings=self._embedding_service_for_user(user),
+            )
+            stored = await pipeline.ingest_forwarded_message(
+                owner_id=bot_user_id,
+                source_label=label,
+                text=body,
+                forward_key=forward_key,
+                message_url=message_url,
+                vertex_config=vertex_config,
+            )
+            if stored:
+                return f"Saved to your inbox from “{label}”. Use /search or /ask to query it."
+            return "You've already saved this forward."
+
+        try:
+            self.services.api.send_message(chat_id, self._async_to_sync(_do()))
+        except Exception as e:
+            logger.exception("Forward ingest failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, f"Error saving forward: {e}")
+
     def _search(self, chat_id: int, bot_user_id: int, query: str, source: str | None) -> None:
         if not query:
             self.services.api.send_message(chat_id=chat_id, text="Usage: /search <query> [--source <url>]")
@@ -539,18 +671,7 @@ class NotebookBot:
 
         self.services.api.send_message(chat_id, "Ingesting messages...")
 
-        v_project = user.get("vertex_project_id") or self.services.settings.vertex_project_id
-        v_region = user.get("vertex_region") or self.services.settings.vertex_region
-        v_index_id = user.get("vertex_index_id") or self.services.settings.vertex_index_id
-
-        vertex_config = None
-        if v_project and v_region and v_index_id:
-            vertex_config = {
-                "api_key": user.get("gemini_api_key") or self.services.settings.gemini_api_key,
-                "project_id": v_project,
-                "region": v_region,
-                "index_id": v_index_id,
-            }
+        vertex_config = self._vertex_ingest_config(user)
 
         async def _do():
             pipeline = IngestionPipeline(

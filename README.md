@@ -59,6 +59,7 @@
 - داشبورد وب سبک با `Python http.server`
 - ربات تلگرام برای orchestration و دستورات اصلی
 - اتصال اکانت واقعی تلگرام کاربر با session string از طریق Telethon
+- **Forwarded Inbox**: فوروارد هر پیام به ربات، متن/کپشن آن را در inbox شخصی و قابل‌جستجوی کاربر ذخیره می‌کند
 
 ---
 
@@ -338,7 +339,8 @@ python -m telegram_notebook.bot
 - session string و API keyها باید قبل از production رمزنگاری شوند.
 - import کانال فعلاً batch/job queue کامل ندارد.
 - progress tracking برای ingestهای طولانی هنوز کامل نیست.
-- forwarded inbox و rule engine هنوز باید به شکل کامل اضافه شوند.
+- Forwarded Inbox فعلاً فقط متن/کپشن پیام‌های فورواردشده را ایندکس می‌کند؛ دانلود و transcription مدیا، OCR عکس و استخراج متن از PDF/DOCX هنوز اضافه نشده.
+- rule engine هنوز باید اضافه شود.
 - برای دیتاست بزرگ بهتر است به PostgreSQL + pgvector یا Qdrant مهاجرت شود.
 
 ---

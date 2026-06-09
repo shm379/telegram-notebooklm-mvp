@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -13,6 +14,10 @@ from .transcription import TranscriptionService
 
 
 logger = logging.getLogger(__name__)
+
+# Synthetic source that collects messages a user forwards to the bot.
+FORWARDED_INBOX_URL = "inbox://forwarded"
+FORWARDED_INBOX_TITLE = "Forwarded Inbox"
 
 
 @dataclass(slots=True)
@@ -111,6 +116,52 @@ class IngestionPipeline:
                     continue
 
             return stats
+
+    async def ingest_forwarded_message(
+        self,
+        *,
+        owner_id: int,
+        source_label: str,
+        text: str,
+        forward_key: int,
+        message_url: str | None = None,
+        message_date: str | None = None,
+        vertex_config: dict | None = None,
+    ) -> bool:
+        """Store a message the user forwarded to the bot into their Forwarded Inbox.
+
+        The inbox is a per-user synthetic channel, so forwarded content becomes
+        searchable through the same /search and /ask paths as ingested channels.
+        Returns False when the item was already stored (idempotent on ``forward_key``).
+        """
+        channel_id = self.repository.upsert_channel(
+            owner_id=owner_id,
+            telegram_id=0,
+            channel_url=FORWARDED_INBOX_URL,
+            title=FORWARDED_INBOX_TITLE,
+            username=None,
+        )
+        message_id = self.repository.create_or_get_message(
+            channel_id=channel_id,
+            telegram_message_id=forward_key,
+            message_date=message_date or datetime.now(timezone.utc).isoformat(),
+            message_url=message_url,
+            caption=source_label,
+        )
+        media_id = self.repository.create_or_get_media(
+            message_id=message_id,
+            file_name=source_label,
+            file_path="",
+            mime_type="text/plain",
+            media_kind="forward",
+            duration_seconds=None,
+            file_size_bytes=len(text.encode("utf-8")),
+        )
+        if self.repository.media_already_transcribed(media_id):
+            return False
+        await self._process_text_data(media_item_id=media_id, text=text, vertex_config=vertex_config)
+        self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=text)
+        return True
 
     async def _process_text_message(self, message_id: int, text: str, vertex_config: dict | None = None) -> None:
         media_id = self.repository.create_or_get_media(

@@ -1,5 +1,30 @@
 # Changelog
 
+## Phase 4 — Forwarded Inbox (MVP) (2026-06-09)
+
+پیاده‌سازی فاز بعدی Roadmap: «Smart Telegram Inbox». حالا کاربر می‌تواند هر پیامی را به ربات فوروارد کند و متن/کپشن آن در یک inbox شخصی و قابل‌جستجو ذخیره می‌شود.
+
+### Behaviour
+- ربات پیام‌های فورواردشده را تشخیص می‌دهد (هم فرمت جدید `forward_origin` و هم فیلدهای legacy مثل `forward_from`/`forward_from_chat`/`forward_sender_name`) و قبل از منطق auth-flow مسیر می‌دهد، بنابراین با پاسخ‌های متنی فرایند `/connect` تداخل ندارد.
+- متن (`text`) یا `caption` فوروارد، همراه با یک تگ نوع مدیا (مثلاً `[Forwarded document: report.pdf]`) و منبع (نام کانال/کاربر مبدأ) ذخیره می‌شود.
+- وقتی مبدأ یک کانال عمومی باشد، لینک `https://t.me/<username>/<id>` به‌عنوان منبع ساخته می‌شود.
+- محتوای ذخیره‌شده از طریق همان `/search` و `/ask` قابل پرس‌وجوست (chunk + embedding، با fallback به keyword اگر embedding در دسترس نباشد).
+
+### Data model
+- inbox به‌صورت یک «کانال» مصنوعی per-user با `channel_url = inbox://forwarded` پیاده شده تا از schema و مسیر جستجوی موجود (و ایزولاسیون `owner_id` فاز ۲) دوباره استفاده شود.
+- متد جدید `IngestionPipeline.ingest_forwarded_message` (idempotent بر اساس message_id فوروارد).
+
+### Bot UX
+- `/start` و `/help` به‌روزرسانی شدند تا قابلیت فوروارد را توضیح دهند.
+- پیام راهنما برای آیتم‌های فقط-مدیا بدون متن (که در این نسخه هنوز ایندکس نمی‌شوند).
+- refactor: ساخت Vertex-config مربوط به ایندکس در یک helper مشترک (`_vertex_ingest_config`) جمع شد تا `/ingest` و inbox از آن استفاده کنند.
+
+### خارج از scope (follow-up)
+- دانلود و transcription مدیای فورواردشده از طریق Bot API، OCR عکس‌ها، و استخراج متن از PDF/DOCX/Excel.
+
+### Tests
+- `tests/test_forwarded.py`: تشخیص فوروارد، استخراج منبع/لینک/تگ مدیا، و ingest end-to-end (ذخیره و جستجوپذیری، idempotency، و per-user بودن inbox).
+
 ## Phase 3 — Web API Auth & Secret Encryption (2026-06-09)
 
 دو مورد امنیتی باقی‌مانده از تحلیل: احراز هویت Web API و رمزنگاری secrets در دیتابیس.
