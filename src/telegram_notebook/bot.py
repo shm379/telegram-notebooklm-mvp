@@ -13,6 +13,7 @@ from .bot_api import TelegramBotApi
 from .config import Settings, get_settings
 from .db import Repository, connect
 from .embeddings import EmbeddingService
+from .jobs import JobWorker
 from .logging_config import setup_logging
 from .pipeline import IngestionPipeline
 from .rules import match_tags
@@ -103,9 +104,11 @@ class NotebookBot:
         self.executor = ThreadPoolExecutor(max_workers=4)
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        self.worker = JobWorker(self.services.repository, self._run_import_job)
 
     def run_forever(self) -> None:
         logger.info("Bot polling started")
+        self.worker.start()
         while True:
             try:
                 updates = self.services.api.get_updates(offset=self.offset, timeout=30)
@@ -261,6 +264,12 @@ class NotebookBot:
             self._handle_join(chat_id, bot_user_id, text.removeprefix("/join").strip())
         elif command == "/ingest":
             self._handle_ingest(chat_id, bot_user_id, text.removeprefix("/ingest").strip())
+        elif command == "/import":
+            self._handle_import(chat_id, bot_user_id, text.removeprefix("/import").strip())
+        elif command == "/jobs":
+            self._handle_jobs(chat_id, bot_user_id)
+        elif command == "/canceljob":
+            self._handle_cancel_job(chat_id, bot_user_id, text.removeprefix("/canceljob").strip())
         elif command == "/sources":
             self._handle_sources(chat_id, bot_user_id)
         elif command == "/delete":
@@ -304,7 +313,10 @@ class NotebookBot:
             "/connect — link your Telegram account and configure AI\n"
             "/status — show your connection and indexing status\n"
             "/disconnect — remove your saved session and credentials\n"
-            "/ingest &lt;channel_url&gt; — index a channel or source\n"
+            "/ingest &lt;channel_url&gt; — index a channel now (quick, inline)\n"
+            "/import &lt;channel_url&gt; [limit] — queue a full, resumable import\n"
+            "/jobs — show your import jobs and progress\n"
+            "/canceljob &lt;id&gt; — cancel a queued/running import\n"
             "/search &lt;query&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — keyword/semantic search\n"
             "/ask &lt;question&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — ask the AI over your archive\n"
             "/sources — list indexed sources\n"
@@ -751,6 +763,102 @@ class NotebookBot:
         except Exception as e:
             logger.exception("Join failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, f"Error: {e}")
+
+    def _handle_import(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        if not user or not user.get("session_string"):
+            self.services.api.send_message(chat_id, "Please /connect first.")
+            return
+        parts = args.split()
+        if not parts:
+            self.services.api.send_message(chat_id, "Usage: /import <channel_url> [limit]")
+            return
+        url = parts[0]
+        limit: int | None = None
+        if len(parts) > 1:
+            try:
+                limit = int(parts[1])
+            except ValueError:
+                self.services.api.send_message(chat_id, "Limit must be a number.")
+                return
+        job_id = self.services.repository.create_job(
+            owner_id=bot_user_id, channel_url=url, limit=limit,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        scope = f"up to {limit}" if limit else "all"
+        self.services.api.send_message(
+            chat_id, f"Queued import #{job_id} for {url} ({scope} messages). Track it with /jobs."
+        )
+
+    def _handle_jobs(self, chat_id: int, bot_user_id: int) -> None:
+        jobs = self.services.repository.list_jobs(owner_id=bot_user_id, limit=10)
+        if not jobs:
+            self.services.api.send_message(chat_id, "No import jobs yet. Start one with /import <channel_url>.")
+            return
+        lines = ["<b>Recent imports</b>"]
+        for job in jobs:
+            total = job.get("total")
+            progress = f"{job.get('processed', 0)}/{total}" if total else str(job.get("processed", 0))
+            line = f"#{job['id']} — {job['status']} — {job['channel_url']} ({progress})"
+            if job.get("error"):
+                line += f"\n  ⚠️ {str(job['error'])[:140]}"
+            lines.append(line)
+        lines.append("\nCancel a running import with /canceljob <id>.")
+        self.services.api.send_message(chat_id, "\n".join(lines))
+
+    def _handle_cancel_job(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        try:
+            job_id = int(args.strip())
+        except ValueError:
+            self.services.api.send_message(chat_id, "Usage: /canceljob <id>")
+            return
+        if self.services.repository.request_job_cancel(owner_id=bot_user_id, job_id=job_id):
+            self.services.api.send_message(chat_id, f"Cancellation requested for import #{job_id}. It will stop shortly.")
+        else:
+            self.services.api.send_message(chat_id, "No active job with that id.")
+
+    def _run_import_job(self, job: dict, on_progress, is_cancelled) -> None:
+        """Runner invoked by the JobWorker thread to execute one import job."""
+        owner_id = job["owner_id"]
+        user = self.services.repository.get_bot_user(bot_user_id=owner_id)
+        if not user or not user.get("session_string"):
+            raise RuntimeError("Account not connected. Use /connect before importing.")
+        chat_id = user.get("chat_id")
+        pipeline = IngestionPipeline(
+            settings=self.services.settings,
+            repository=self.services.repository,
+            transcription=self._transcription_service_for_user(user),
+            embeddings=self._embedding_service_for_user(user),
+        )
+
+        async def _do():
+            return await pipeline.ingest_channel(
+                owner_id=owner_id,
+                channel_url=job["channel_url"],
+                limit=job.get("limit_count"),
+                api_id=user.get("api_id"),
+                api_hash=user.get("api_hash"),
+                session_string=user["session_string"],
+                vertex_config=self._vertex_ingest_config(user),
+                resume_from=int(job.get("cursor") or 0),
+                progress_cb=on_progress,
+                should_cancel=is_cancelled,
+            )
+
+        try:
+            stats = asyncio.run(_do())
+        except Exception as exc:
+            if chat_id:
+                self.services.api.send_message(chat_id, f"Import #{job['id']} failed: {exc}")
+            raise
+
+        if chat_id:
+            if is_cancelled():
+                self.services.api.send_message(chat_id, f"Import #{job['id']} cancelled.")
+            else:
+                self.services.api.send_message(
+                    chat_id, f"Import #{job['id']} complete: indexed {stats.processed_media} item(s) from {stats.channel_title or stats.channel_url}."
+                )
 
     def _handle_ingest(self, chat_id: int, bot_user_id: int, link: str) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)

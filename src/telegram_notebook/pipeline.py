@@ -49,11 +49,14 @@ class IngestionPipeline:
         *,
         owner_id: int,
         channel_url: str,
-        limit: int,
+        limit: int | None,
         api_id: int | None = None,
         api_hash: str | None = None,
         session_string: str | None = None,
         vertex_config: dict[str, str] | None = None,
+        resume_from: int = 0,
+        progress_cb=None,
+        should_cancel=None,
     ) -> IngestStats:
         from .telegram_client import (
             build_client,
@@ -85,10 +88,17 @@ class IngestionPipeline:
                 channel_title=channel.title,
             )
 
-            messages = await iter_all_messages(client, channel_url=channel_url, limit=limit)
+            messages = await iter_all_messages(
+                client, channel_url=channel_url, limit=limit, min_id=resume_from
+            )
             stats.processed_messages = len(messages)
+            total = len(messages)
 
-            for msg in messages:
+            for index, msg in enumerate(messages, 1):
+                if should_cancel is not None and should_cancel():
+                    logger.info("Ingest of %s cancelled after %s messages", channel_url, index - 1)
+                    break
+
                 message_id = self.repository.create_or_get_message(
                     channel_id=channel_id,
                     telegram_message_id=msg.telegram_message_id,
@@ -100,9 +110,7 @@ class IngestionPipeline:
                 if msg.media_kind == "text" and msg.caption:
                     await self._process_text_message(owner_id, message_id, msg.caption, vertex_config)
                     stats.processed_media += 1
-                    continue
-
-                if msg.media_kind in {"audio", "video"}:
+                elif msg.media_kind in {"audio", "video"}:
                     processed = await self._process_media_message(
                         owner_id=owner_id,
                         client=client,
@@ -115,7 +123,11 @@ class IngestionPipeline:
                         stats.processed_media += 1
                     else:
                         stats.skipped_media += 1
-                    continue
+
+                # Record progress and a resume cursor (messages arrive oldest-first,
+                # so the latest processed id is the highest seen so far).
+                if progress_cb is not None:
+                    progress_cb(index, total, msg.telegram_message_id)
 
             return stats
 

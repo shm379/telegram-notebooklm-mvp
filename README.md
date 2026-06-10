@@ -61,6 +61,7 @@
 - اتصال اکانت واقعی تلگرام کاربر با session string از طریق Telethon
 - **Forwarded Inbox**: فوروارد هر پیام به ربات، متن/کپشن آن را در inbox شخصی و قابل‌جستجوی کاربر ذخیره می‌کند
 - **Rule Engine + Tags**: تعریف قانون keyword→tag، تگ‌گذاری خودکار محتوای واردشده، و فیلتر `/search` و `/ask` با `--tag`
+- **Import Jobs**: import کامل کانال در background با صف، progress tracking، resume بعد از قطع‌شدن، و امکان لغو
 
 ---
 
@@ -126,7 +127,16 @@ Python Backend
 بررسی وضعیت اتصال
 
 /ingest <channel_url>
-ایندکس کردن کانال یا منبع تلگرامی
+ایندکس سریع و inline یک کانال
+
+/import <channel_url> [limit]
+صف‌کردن یک import کامل و resumable در background
+
+/jobs
+نمایش وضعیت و پیشرفت jobهای import
+
+/canceljob <id>
+لغو یک job در صف یا در حال اجرا
 
 /search <query>
 جستجو در آرشیو
@@ -361,8 +371,7 @@ python -m telegram_notebook.bot
 - احراز هویت Web API با `WEB_API_TOKEN` و رمزنگاری secrets در دیتابیس با `SECRETS_KEY` اضافه شده؛ برای production هر دو متغیر را تنظیم کنید.
 - storage فعلی برای MVP مناسب است، نه دیتاست بزرگ.
 - session string و API keyها باید قبل از production رمزنگاری شوند.
-- import کانال فعلاً batch/job queue کامل ندارد.
-- progress tracking برای ingestهای طولانی هنوز کامل نیست.
+- import کامل کانال با صف، progress و resume از طریق `/import` پشتیبانی می‌شود (یک worker در background)؛ هنوز یک sandbox تست برای کل مسیر Telethon وجود ندارد.
 - Forwarded Inbox فعلاً فقط متن/کپشن پیام‌های فورواردشده را ایندکس می‌کند؛ دانلود و transcription مدیا، OCR عکس و استخراج متن از PDF/DOCX هنوز اضافه نشده.
 - Rule Engine بر اساس تطبیق keyword (substring) است؛ قوانین AI-based و forward خودکار به کانال آرشیو هنوز اضافه نشده.
 - برای دیتاست بزرگ بهتر است به PostgreSQL + pgvector یا Qdrant مهاجرت شود.

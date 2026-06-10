@@ -185,6 +185,22 @@ class Repository:
                         PRIMARY KEY (owner_id, media_item_id, tag)
                     )
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS jobs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER,
+                        channel_url TEXT,
+                        status TEXT,
+                        total INTEGER,
+                        processed INTEGER DEFAULT 0,
+                        cursor INTEGER DEFAULT 0,
+                        limit_count INTEGER,
+                        error TEXT,
+                        cancel_requested INTEGER DEFAULT 0,
+                        created_at TEXT,
+                        updated_at TEXT
+                    )
+                """)
                 self._ensure_channel_owner(conn)
                 conn.commit()
 
@@ -584,3 +600,100 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                     """,
                     (owner_id,),
                 ).fetchall()]
+
+    # --- Import jobs (queue / progress / resume) ---------------------------
+
+    def create_job(self, *, owner_id: int, channel_url: str, limit: int | None, created_at: str | None = None) -> int:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cur = conn.execute(
+                    """
+                    INSERT INTO jobs (owner_id, channel_url, status, processed, cursor, limit_count, cancel_requested, created_at, updated_at)
+                    VALUES (?, ?, 'queued', 0, 0, ?, 0, ?, ?)
+                    """,
+                    (owner_id, channel_url, limit, created_at, created_at),
+                )
+                conn.commit()
+                return cur.lastrowid
+
+    def get_job(self, *, job_id: int, owner_id: int | None = None) -> dict[str, Any] | None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                if owner_id is None:
+                    res = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                else:
+                    res = conn.execute("SELECT * FROM jobs WHERE id = ? AND owner_id = ?", (job_id, owner_id)).fetchone()
+                return dict(res) if res else None
+
+    def list_jobs(self, *, owner_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                return [dict(r) for r in conn.execute(
+                    "SELECT * FROM jobs WHERE owner_id = ? ORDER BY id DESC LIMIT ?", (owner_id, limit)
+                ).fetchall()]
+
+    def claim_next_queued_job(self, *, updated_at: str | None = None) -> dict[str, Any] | None:
+        """Atomically pick the oldest queued job and mark it running."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT * FROM jobs WHERE status = 'queued' ORDER BY id LIMIT 1"
+                ).fetchone()
+                if not row:
+                    return None
+                conn.execute(
+                    "UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?",
+                    (updated_at, row["id"]),
+                )
+                conn.commit()
+                job = dict(row)
+                job["status"] = "running"
+                return job
+
+    def update_job_progress(self, *, job_id: int, processed: int, total: int | None, cursor: int | None, updated_at: str | None = None) -> None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "UPDATE jobs SET processed = ?, total = ?, cursor = ?, updated_at = ? WHERE id = ?",
+                    (processed, total, cursor, updated_at, job_id),
+                )
+                conn.commit()
+
+    def finish_job(self, *, job_id: int, status: str, error: str | None = None, updated_at: str | None = None) -> None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "UPDATE jobs SET status = ?, error = ?, updated_at = ? WHERE id = ?",
+                    (status, error, updated_at, job_id),
+                )
+                conn.commit()
+
+    def request_job_cancel(self, *, owner_id: int, job_id: int) -> bool:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cur = conn.execute(
+                    "UPDATE jobs SET cancel_requested = 1 WHERE id = ? AND owner_id = ? AND status IN ('queued', 'running')",
+                    (job_id, owner_id),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+
+    def is_cancel_requested(self, *, job_id: int) -> bool:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                res = conn.execute("SELECT cancel_requested FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                return bool(res and res[0])
+
+    def requeue_running_jobs(self, *, updated_at: str | None = None) -> int:
+        """Reset jobs left 'running' by a crashed worker back to 'queued' so they resume."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cur = conn.execute(
+                    "UPDATE jobs SET status = 'queued', updated_at = ? WHERE status = 'running'",
+                    (updated_at,),
+                )
+                conn.commit()
+                return cur.rowcount

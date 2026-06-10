@@ -1,5 +1,29 @@
 # Changelog
 
+## Phase 6 — Full Import Jobs (2026-06-09)
+
+import کامل کانال از Roadmap: صف، background worker، progress tracking، resume بعد از قطع‌شدن، و لغو.
+
+### Data model
+- جدول `jobs` (`owner_id`, `channel_url`, `status`, `total`, `processed`, `cursor`, `limit_count`, `error`, `cancel_requested`, زمان‌ها). status یکی از `queued|running|done|failed|cancelled`.
+- متدهای repository: `create_job`, `get_job`, `list_jobs`, `claim_next_queued_job` (انتخاب اتمیک قدیمی‌ترین job و انتقال به running)، `update_job_progress`, `finish_job`, `request_job_cancel`, `is_cancel_requested`, و `requeue_running_jobs` (بازگرداندن jobهای running جامانده از worker کرش‌کرده به queued).
+
+### Worker
+- ماژول جدید `jobs.py` با `JobWorker` (یک thread دیمن). از Telegram جدا و با یک `runner` تزریق‌شده کار می‌کند تا state machine به‌طور کامل unit-testable باشد.
+- روی استارت، jobهای running جامانده را requeue می‌کند (resume بعد از کرش).
+
+### Pipeline
+- `ingest_channel` پارامترهای `resume_from` (min_id برای ادامه)، `progress_cb(processed, total, last_msg_id)` و `should_cancel()` گرفت. به‌ازای هر پیام، cancel چک و progress/cursor به‌روزرسانی می‌شود. به‌خاطر idempotent بودن ذخیره‌سازی، resume امن است.
+- `iter_all_messages` پارامتر `min_id` گرفت و `limit` حالا اختیاری (`None` = همه‌ی پیام‌ها).
+
+### Bot
+- `/import <channel_url> [limit]` (صف‌کردن import کامل/resumable)، `/jobs` (وضعیت و پیشرفت)، `/canceljob <id>`.
+- `/ingest` به‌عنوان مسیر سریع inline باقی می‌ماند. worker در `run_forever` استارت می‌شود و در پایان هر job پیام done/failed/cancelled به کاربر می‌فرستد.
+- `/help` به‌روزرسانی شد.
+
+### Tests
+- `tests/test_jobs.py`: چرخه‌ی حیات job، claim اتمیک و ترتیب، progress/cancel/requeue، و state machine worker با runner جعلی (done/failed/cancelled و انتقال cursor برای resume).
+
 ## Phase 5 — Rules + Tags (2026-06-09)
 
 موتور قانون (Rule Engine) و سیستم تگ از Roadmap. کاربر قانون keyword→tag تعریف می‌کند و محتوای واردشده به‌صورت خودکار تگ می‌خورد و قابل فیلتر در جستجو/پرسش می‌شود.

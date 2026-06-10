@@ -199,13 +199,14 @@ async def iter_all_messages(
     client: Any,
     *,
     channel_url: str,
-    limit: int,
+    limit: int | None,
+    min_id: int = 0,
 ) -> list[MediaMessage]:
     entity = await client.get_entity(channel_url)
     username = getattr(entity, "username", None)
     results: list[MediaMessage] = []
 
-    async for message in client.iter_messages(entity, limit=limit):
+    async for message in client.iter_messages(entity, limit=limit, min_id=min_id):
         if not message:
             continue
             
