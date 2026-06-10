@@ -165,6 +165,26 @@ class Repository:
                         vertex_deployed_index_id TEXT
                     )
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS rules (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER,
+                        keyword TEXT,
+                        tag TEXT,
+                        created_at TEXT
+                    )
+                """)
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_owner_kw_tag ON rules(owner_id, keyword, tag)"
+                )
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS content_tags (
+                        owner_id INTEGER,
+                        media_item_id INTEGER,
+                        tag TEXT,
+                        PRIMARY KEY (owner_id, media_item_id, tag)
+                    )
+                """)
                 self._ensure_channel_owner(conn)
                 conn.commit()
 
@@ -276,7 +296,7 @@ class Repository:
                 res = conn.execute("SELECT transcript_status FROM media_items WHERE id = ?", (media_item_id,)).fetchone()
                 return res and res[0] == 'done'
 
-    def keyword_candidates(self, *, owner_id: int, query: str, top_k: int, channel_url: str | None) -> list[dict[str, Any]]:
+    def keyword_candidates(self, *, owner_id: int, query: str, top_k: int, channel_url: str | None, tag: str | None = None) -> list[dict[str, Any]]:
         # جستجوی متنی سریع در SQLite
         with self.lock:
             with sqlite3.connect(self.path) as conn:
@@ -293,6 +313,11 @@ class Repository:
                 if channel_url:
                     sql += " AND ch.channel_url = ?"
                     params.append(channel_url)
+                if tag:
+                    sql += """ AND mi.id IN (
+                        SELECT media_item_id FROM content_tags WHERE owner_id = ? AND tag = ?
+                    )"""
+                    params.extend([owner_id, tag])
 
                 rows = conn.execute(sql + " LIMIT ?", params + [top_k]).fetchall()
                 return [dict(r) for r in rows]
@@ -468,3 +493,94 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.execute("DELETE FROM auth_flows WHERE bot_user_id = ?", (bot_user_id,))
+
+    # --- Rules & tags ------------------------------------------------------
+
+    def add_rule(self, *, owner_id: int, keyword: str, tag: str, created_at: str | None = None) -> int:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO rules (owner_id, keyword, tag, created_at) VALUES (?, ?, ?, ?)",
+                    (owner_id, keyword, tag, created_at),
+                )
+                conn.commit()
+                res = conn.execute(
+                    "SELECT id FROM rules WHERE owner_id = ? AND keyword = ? AND tag = ?",
+                    (owner_id, keyword, tag),
+                ).fetchone()
+                return res[0] if res else 0
+
+    def list_rules(self, *, owner_id: int) -> list[dict[str, Any]]:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                return [dict(r) for r in conn.execute(
+                    "SELECT id, keyword, tag FROM rules WHERE owner_id = ? ORDER BY id", (owner_id,)
+                ).fetchall()]
+
+    def remove_rule(self, *, owner_id: int, rule_id: int) -> bool:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cur = conn.execute(
+                    "DELETE FROM rules WHERE owner_id = ? AND id = ?", (owner_id, rule_id)
+                )
+                conn.commit()
+                return cur.rowcount > 0
+
+    def tag_media(self, *, owner_id: int, media_item_id: int, tags: set[str] | list[str]) -> None:
+        if not tags:
+            return
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO content_tags (owner_id, media_item_id, tag) VALUES (?, ?, ?)",
+                    [(owner_id, media_item_id, tag) for tag in tags],
+                )
+                conn.commit()
+
+    def list_tags(self, *, owner_id: int) -> list[dict[str, Any]]:
+        """Tags with the number of distinct content items each one covers."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                return [dict(r) for r in conn.execute(
+                    """
+                    SELECT tag, COUNT(DISTINCT media_item_id) AS count
+                    FROM content_tags WHERE owner_id = ?
+                    GROUP BY tag ORDER BY count DESC, tag
+                    """,
+                    (owner_id,),
+                ).fetchall()]
+
+    def media_ids_for_tag(self, *, owner_id: int, tag: str) -> set[int]:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                return {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT media_item_id FROM content_tags WHERE owner_id = ? AND tag = ?",
+                        (owner_id, tag),
+                    ).fetchall()
+                }
+
+    def clear_tags(self, *, owner_id: int) -> None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute("DELETE FROM content_tags WHERE owner_id = ?", (owner_id,))
+                conn.commit()
+
+    def media_texts(self, *, owner_id: int) -> list[dict[str, Any]]:
+        """Every stored media item for the owner with its transcript/text, for re-tagging."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                return [dict(r) for r in conn.execute(
+                    """
+                    SELECT mi.id AS media_item_id, mi.transcript_text AS text
+                    FROM media_items mi
+                    JOIN messages m ON mi.message_id = m.id
+                    JOIN channels ch ON m.channel_id = ch.id
+                    WHERE ch.owner_id = ? AND mi.transcript_text IS NOT NULL
+                    """,
+                    (owner_id,),
+                ).fetchall()]

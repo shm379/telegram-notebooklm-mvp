@@ -5,6 +5,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -14,6 +15,7 @@ from .db import Repository, connect
 from .embeddings import EmbeddingService
 from .logging_config import setup_logging
 from .pipeline import IngestionPipeline
+from .rules import match_tags
 from .search import SearchService
 from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
 from .transcription import TranscriptionService
@@ -246,11 +248,15 @@ class NotebookBot:
             self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
             self.services.api.send_message(chat_id=chat_id, text="Operation cancelled.", reply_markup=TelegramBotApi.remove_keyboard())
         elif command == "/search":
-            query, source = self._split_source(text.removeprefix("/search").strip())
-            self._search(chat_id, bot_user_id, query, source)
+            query, source, tag = self._split_filters(text.removeprefix("/search").strip())
+            self._search(chat_id, bot_user_id, query, source, tag)
         elif command == "/ask":
-            query, source = self._split_source(text.removeprefix("/ask").strip())
-            self._ask_brain(chat_id, bot_user_id, query, source)
+            query, source, tag = self._split_filters(text.removeprefix("/ask").strip())
+            self._ask_brain(chat_id, bot_user_id, query, source, tag)
+        elif command == "/rule":
+            self._handle_rule(chat_id, bot_user_id, text.removeprefix("/rule").strip())
+        elif command == "/tags":
+            self._handle_tags(chat_id, bot_user_id)
         elif command == "/join":
             self._handle_join(chat_id, bot_user_id, text.removeprefix("/join").strip())
         elif command == "/ingest":
@@ -263,11 +269,23 @@ class NotebookBot:
             self.services.api.send_message(chat_id=chat_id, text="Unknown command. Send /help to see what I can do.")
 
     @staticmethod
-    def _split_source(query: str) -> tuple[str, str | None]:
-        if " --source " in query:
-            head, _, tail = query.partition(" --source ")
-            return head.strip(), (tail.strip() or None)
-        return query.strip(), None
+    def _split_filters(text: str) -> tuple[str, str | None, str | None]:
+        """Parse a query with optional ``--source <url>`` (single token) and
+        ``--tag <tag>`` (rest of line, may contain spaces) filters."""
+        tokens = text.split()
+        source = None
+        if "--source" in tokens:
+            idx = tokens.index("--source")
+            if idx + 1 < len(tokens):
+                source = tokens[idx + 1]
+                del tokens[idx:idx + 2]
+        remaining = " ".join(tokens)
+        tag = None
+        head, sep, tail = remaining.partition("--tag")
+        if sep:
+            tag = tail.strip() or None
+            remaining = head
+        return remaining.strip(), source, tag
 
     def _send_welcome(self, chat_id: int) -> None:
         self.services.api.send_message(
@@ -287,11 +305,17 @@ class NotebookBot:
             "/status — show your connection and indexing status\n"
             "/disconnect — remove your saved session and credentials\n"
             "/ingest &lt;channel_url&gt; — index a channel or source\n"
-            "/search &lt;query&gt; [--source &lt;url&gt;] — keyword/semantic search\n"
-            "/ask &lt;question&gt; [--source &lt;url&gt;] — ask the AI over your archive\n"
+            "/search &lt;query&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — keyword/semantic search\n"
+            "/ask &lt;question&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — ask the AI over your archive\n"
             "/sources — list indexed sources\n"
             "/delete &lt;channel_url&gt; — delete a source's data\n"
             "/cancel — cancel the current flow\n\n"
+            "<b>Rules &amp; tags</b>\n"
+            "/rule add &lt;keyword&gt; -&gt; &lt;tag&gt; — auto-tag matching content\n"
+            "/rule list — show your rules\n"
+            "/rule remove &lt;id&gt; — delete a rule\n"
+            "/rule apply — re-tag existing content with current rules\n"
+            "/tags — list your tags and their counts\n\n"
             "<b>Forwarded Inbox</b>\n"
             "Forward any message to me and I'll save its text/caption to your "
             "searchable inbox. Then use /search or /ask over it."
@@ -572,15 +596,15 @@ class NotebookBot:
             logger.exception("Forward ingest failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, f"Error saving forward: {e}")
 
-    def _search(self, chat_id: int, bot_user_id: int, query: str, source: str | None) -> None:
+    def _search(self, chat_id: int, bot_user_id: int, query: str, source: str | None, tag: str | None = None) -> None:
         if not query:
-            self.services.api.send_message(chat_id=chat_id, text="Usage: /search <query> [--source <url>]")
+            self.services.api.send_message(chat_id=chat_id, text="Usage: /search <query> [--source <url>] [--tag <tag>]")
             return
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
         vertex_config = self._vertex_search_config(user)
         try:
             results = self._search_service_for_user(user).search(
-                owner_id=bot_user_id, query=query, channel_url=source, top_k=5, vertex_config=vertex_config
+                owner_id=bot_user_id, query=query, channel_url=source, tag=tag, top_k=5, vertex_config=vertex_config
             )
         except Exception:
             logger.exception("Search failed for user %s", bot_user_id)
@@ -592,9 +616,9 @@ class NotebookBot:
             resp = [f"{r.channel_title}\n{r.chunk_text[:300]}\n{r.message_url}" for r in results]
             self.services.api.send_message(chat_id=chat_id, text="\n\n".join(resp))
 
-    def _ask_brain(self, chat_id: int, bot_user_id: int, query: str, source: str | None) -> None:
+    def _ask_brain(self, chat_id: int, bot_user_id: int, query: str, source: str | None, tag: str | None = None) -> None:
         if not query:
-            self.services.api.send_message(chat_id=chat_id, text="Usage: /ask <question> [--source <url>]")
+            self.services.api.send_message(chat_id=chat_id, text="Usage: /ask <question> [--source <url>] [--tag <tag>]")
             return
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
         gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
@@ -605,7 +629,7 @@ class NotebookBot:
         self.services.api.send_message(chat_id=chat_id, text="AI Brain is thinking...")
         try:
             search_service = self._search_service_for_user(user)
-            results = search_service.search(owner_id=bot_user_id, query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
+            results = search_service.search(owner_id=bot_user_id, query=query, channel_url=source, tag=tag, top_k=5, vertex_config=vertex_config)
             answer = search_service.generate_answer(
                 query=query,
                 results=results,
@@ -638,6 +662,74 @@ class NotebookBot:
             self.services.api.send_message(chat_id, "Deleted.")
         else:
             self.services.api.send_message(chat_id, "Not found.")
+
+    @staticmethod
+    def _parse_rule_add(rest: str) -> tuple[str, str] | None:
+        if "->" not in rest:
+            return None
+        keyword, _, tag = rest.partition("->")
+        keyword, tag = keyword.strip(), tag.strip()
+        if not keyword or not tag:
+            return None
+        return keyword, tag
+
+    def _handle_rule(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        parts = args.split(maxsplit=1)
+        sub = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub == "add":
+            parsed = self._parse_rule_add(rest)
+            if not parsed:
+                self.services.api.send_message(chat_id, "Usage: /rule add <keyword> -> <tag>")
+                return
+            keyword, tag = parsed
+            self.services.repository.add_rule(
+                owner_id=bot_user_id, keyword=keyword, tag=tag,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            self.services.api.send_message(chat_id, f"Rule added: “{keyword}” → {tag}\nRun /rule apply to tag existing items.")
+        elif sub in ("", "list"):
+            rules = self.services.repository.list_rules(owner_id=bot_user_id)
+            if not rules:
+                self.services.api.send_message(chat_id, "No rules yet. Add one with: /rule add <keyword> -> <tag>")
+                return
+            lines = ["<b>Your rules</b>"] + [f"#{r['id']}: “{r['keyword']}” → {r['tag']}" for r in rules]
+            self.services.api.send_message(chat_id, "\n".join(lines))
+        elif sub == "remove":
+            try:
+                rule_id = int(rest)
+            except ValueError:
+                self.services.api.send_message(chat_id, "Usage: /rule remove <rule_id>")
+                return
+            if self.services.repository.remove_rule(owner_id=bot_user_id, rule_id=rule_id):
+                self.services.api.send_message(chat_id, f"Rule #{rule_id} removed. Run /rule apply to refresh tags.")
+            else:
+                self.services.api.send_message(chat_id, "Rule not found.")
+        elif sub == "apply":
+            self._retag_all(chat_id, bot_user_id)
+        else:
+            self.services.api.send_message(chat_id, "Usage: /rule add|list|remove|apply")
+
+    def _retag_all(self, chat_id: int, bot_user_id: int) -> None:
+        """Recompute tags for all of the user's stored content from the current rules."""
+        rules = self.services.repository.list_rules(owner_id=bot_user_id)
+        self.services.repository.clear_tags(owner_id=bot_user_id)
+        tagged = 0
+        for item in self.services.repository.media_texts(owner_id=bot_user_id):
+            tags = match_tags(item.get("text"), rules)
+            if tags:
+                self.services.repository.tag_media(owner_id=bot_user_id, media_item_id=item["media_item_id"], tags=tags)
+                tagged += 1
+        self.services.api.send_message(chat_id, f"Re-tagged {tagged} item(s) using {len(rules)} rule(s).")
+
+    def _handle_tags(self, chat_id: int, bot_user_id: int) -> None:
+        tags = self.services.repository.list_tags(owner_id=bot_user_id)
+        if not tags:
+            self.services.api.send_message(chat_id, "No tags yet. Define rules with /rule add, then ingest or run /rule apply.")
+            return
+        lines = ["<b>Your tags</b>"] + [f"{t['tag']}: {t['count']}" for t in tags]
+        self.services.api.send_message(chat_id, "\n".join(lines))
 
     def _handle_join(self, chat_id: int, bot_user_id: int, link: str) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)

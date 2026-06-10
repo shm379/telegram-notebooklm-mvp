@@ -10,6 +10,7 @@ from .chunking import split_text
 from .config import Settings
 from .db import Repository
 from .embeddings import EmbeddingService
+from .rules import match_tags
 from .transcription import TranscriptionService
 
 
@@ -97,12 +98,13 @@ class IngestionPipeline:
                 )
 
                 if msg.media_kind == "text" and msg.caption:
-                    await self._process_text_message(message_id, msg.caption, vertex_config)
+                    await self._process_text_message(owner_id, message_id, msg.caption, vertex_config)
                     stats.processed_media += 1
                     continue
 
                 if msg.media_kind in {"audio", "video"}:
                     processed = await self._process_media_message(
+                        owner_id=owner_id,
                         client=client,
                         channel_url=channel.canonical_url,
                         message_id=message_id,
@@ -161,9 +163,19 @@ class IngestionPipeline:
             return False
         await self._process_text_data(media_item_id=media_id, text=text, vertex_config=vertex_config)
         self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=text)
+        self._apply_rules(owner_id, media_id, text)
         return True
 
-    async def _process_text_message(self, message_id: int, text: str, vertex_config: dict | None = None) -> None:
+    def _apply_rules(self, owner_id: int, media_item_id: int, text: str) -> None:
+        """Auto-tag a stored item by matching the owner's keyword rules against its text."""
+        rules = self.repository.list_rules(owner_id=owner_id)
+        if not rules:
+            return
+        tags = match_tags(text, rules)
+        if tags:
+            self.repository.tag_media(owner_id=owner_id, media_item_id=media_item_id, tags=tags)
+
+    async def _process_text_message(self, owner_id: int, message_id: int, text: str, vertex_config: dict | None = None) -> None:
         media_id = self.repository.create_or_get_media(
             message_id=message_id,
             file_name="text_message",
@@ -177,10 +189,12 @@ class IngestionPipeline:
             return
         await self._process_text_data(media_id, text, vertex_config)
         self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=text)
+        self._apply_rules(owner_id, media_id, text)
 
     async def _process_media_message(
         self,
         *,
+        owner_id: int,
         client: object,
         channel_url: str,
         message_id: int,
@@ -224,6 +238,7 @@ class IngestionPipeline:
 
         await self._process_text_data(media_item_id=media_id, text=combined_text, vertex_config=vertex_config)
         self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=combined_text)
+        self._apply_rules(owner_id, media_id, combined_text)
         return True
 
     async def _process_text_data(self, media_item_id: int, text: str, vertex_config: dict | None = None) -> None:

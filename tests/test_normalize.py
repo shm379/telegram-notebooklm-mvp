@@ -24,7 +24,12 @@ def test_normalize_code_bounds():
     assert normalize_code("") is None
 
 
-def test_split_source():
-    assert NotebookBot._split_source("q --source https://t.me/x") == ("q", "https://t.me/x")
-    assert NotebookBot._split_source("  just a query ") == ("just a query", None)
-    assert NotebookBot._split_source("") == ("", None)
+def test_split_filters():
+    assert NotebookBot._split_filters("q --source https://t.me/x") == ("q", "https://t.me/x", None)
+    assert NotebookBot._split_filters("  just a query ") == ("just a query", None, None)
+    assert NotebookBot._split_filters("") == ("", None, None)
+    # --tag captures the rest of the line (may contain spaces)
+    assert NotebookBot._split_filters("q --tag AI Tools") == ("q", None, "AI Tools")
+    # both filters together, in either order
+    assert NotebookBot._split_filters("q --source https://t.me/x --tag AI Tools") == ("q", "https://t.me/x", "AI Tools")
+    assert NotebookBot._split_filters("q --tag AI Tools --source https://t.me/x") == ("q", "https://t.me/x", "AI Tools")

@@ -61,11 +61,12 @@ class SearchService:
         owner_id: int,
         query: str,
         channel_url: str | None = None,
+        tag: str | None = None,
         top_k: int = 5,
         vertex_config: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
         if not self.embeddings.enabled:
-            rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url)
+            rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url, tag=tag)
             return [SearchResult(score=1.0, **r) for r in rows]
 
         v_proj = vertex_config.get("project_id") if vertex_config else None
@@ -81,8 +82,10 @@ class SearchService:
             logger.warning("Embedding query failed; falling back to keyword search", exc_info=True)
             query_vector = None
         if not query_vector:
-            rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url)
+            rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url, tag=tag)
             return [SearchResult(score=1.0, **r) for r in rows]
+
+        allowed_media_ids = self.repository.media_ids_for_tag(owner_id=owner_id, tag=tag) if tag else None
 
         if vertex_config and vertex_config.get("index_endpoint_id"):
             try:
@@ -105,6 +108,8 @@ class SearchService:
                     if len(id_parts) >= 3:
                         media_item_id = int(id_parts[1])
                         chunk_index = int(id_parts[2])
+                        if allowed_media_ids is not None and media_item_id not in allowed_media_ids:
+                            continue
                         chunk = self.repository.get_chunk_by_media_and_index(
                             owner_id=owner_id, media_item_id=media_item_id, chunk_index=chunk_index
                         )
@@ -132,7 +137,7 @@ class SearchService:
                 logger.exception("Vertex AI search failed; falling back to keyword search")
 
         # Fallback to keyword search for now
-        rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url)
+        rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url, tag=tag)
         return [SearchResult(score=1.0, 
                              channel_title=r.get("channel_title"),
                              channel_url=r.get("channel_url"),

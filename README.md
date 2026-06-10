@@ -60,6 +60,7 @@
 - ربات تلگرام برای orchestration و دستورات اصلی
 - اتصال اکانت واقعی تلگرام کاربر با session string از طریق Telethon
 - **Forwarded Inbox**: فوروارد هر پیام به ربات، متن/کپشن آن را در inbox شخصی و قابل‌جستجوی کاربر ذخیره می‌کند
+- **Rule Engine + Tags**: تعریف قانون keyword→tag، تگ‌گذاری خودکار محتوای واردشده، و فیلتر `/search` و `/ask` با `--tag`
 
 ---
 
@@ -133,17 +134,38 @@ Python Backend
 /search <query> --source <channel_url>
 جستجو فقط داخل یک منبع خاص
 
+/search <query> --tag <tag>
+جستجو فقط داخل محتوای تگ‌خورده
+
 /ask <question>
 پرسش از آرشیو با AI
 
 /ask <question> --source <channel_url>
 پرسش فقط از یک کانال یا منبع خاص
 
+/ask <question> --tag <tag>
+پرسش فقط از محتوای یک تگ خاص
+
 /sources
 نمایش منابع ایندکس‌شده
 
 /delete <channel_url>
 حذف داده‌های یک منبع
+
+/rule add <keyword> -> <tag>
+تعریف قانون برای تگ‌گذاری خودکار محتوا
+
+/rule list
+نمایش قوانین
+
+/rule remove <id>
+حذف یک قانون
+
+/rule apply
+اعمال دوباره قوانین روی محتوای موجود (backfill)
+
+/tags
+نمایش تگ‌ها و تعداد آیتم هر تگ
 
 /cancel
 لغو flow فعلی
@@ -207,9 +229,9 @@ Telegram AI Archive
 
 ---
 
-## Rule Engine پیشنهادی
+## Rule Engine + Tags
 
-در نسخه‌های بعدی، کاربر باید بتواند قانون تعریف کند:
+کاربر می‌تواند قانون keyword→tag تعریف کند:
 
 ```text
 /rule add Claude -> AI Tools
@@ -218,12 +240,14 @@ Telegram AI Archive
 /rule add قیمت -> Leads
 ```
 
-هر محتوای جدیدی که وارد سیستم شود، از نظر متن، کپشن، OCR یا transcript بررسی می‌شود. اگر rule match شد:
+هر محتوای جدیدی که وارد سیستم شود (ingest کانال، transcript مدیا، یا Forwarded Inbox) از نظر متن و کپشن بررسی می‌شود. اگر keyword یک rule (به‌صورت substring و case-insensitive) در متن باشد:
 
-- به tag مربوطه وصل می‌شود
-- در collection جدا قرار می‌گیرد
-- در صورت نیاز به کانال آرشیو کاربر فوروارد می‌شود
-- بعداً در سؤال و جواب قابل فیلتر است
+- tag مربوطه به آن آیتم وصل می‌شود
+- بعداً با `/search ... --tag <tag>` و `/ask ... --tag <tag>` قابل فیلتر است
+- `/tags` تگ‌ها و تعداد آیتم هر تگ را نشان می‌دهد
+- `/rule apply` قوانین فعلی را روی محتوای موجود دوباره اعمال می‌کند (backfill)
+
+**هنوز اضافه نشده (follow-up):** قوانین AI-based و forward خودکار آیتم‌های match‌شده به یک کانال آرشیو.
 
 ---
 
@@ -340,7 +364,7 @@ python -m telegram_notebook.bot
 - import کانال فعلاً batch/job queue کامل ندارد.
 - progress tracking برای ingestهای طولانی هنوز کامل نیست.
 - Forwarded Inbox فعلاً فقط متن/کپشن پیام‌های فورواردشده را ایندکس می‌کند؛ دانلود و transcription مدیا، OCR عکس و استخراج متن از PDF/DOCX هنوز اضافه نشده.
-- rule engine هنوز باید اضافه شود.
+- Rule Engine بر اساس تطبیق keyword (substring) است؛ قوانین AI-based و forward خودکار به کانال آرشیو هنوز اضافه نشده.
 - برای دیتاست بزرگ بهتر است به PostgreSQL + pgvector یا Qdrant مهاجرت شود.
 
 ---

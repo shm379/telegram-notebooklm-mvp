@@ -1,5 +1,31 @@
 # Changelog
 
+## Phase 5 — Rules + Tags (2026-06-09)
+
+موتور قانون (Rule Engine) و سیستم تگ از Roadmap. کاربر قانون keyword→tag تعریف می‌کند و محتوای واردشده به‌صورت خودکار تگ می‌خورد و قابل فیلتر در جستجو/پرسش می‌شود.
+
+### Data model
+- جدول `rules` (`owner_id`, `keyword`, `tag`, `created_at`) با ایندکس یکتای `(owner_id, keyword, tag)`.
+- جدول `content_tags` (`owner_id`, `media_item_id`, `tag`) با primary key ترکیبی (تگ‌گذاری idempotent).
+- هر دو با `CREATE TABLE IF NOT EXISTS` ساخته می‌شوند؛ برای دیتابیس‌های موجود نیازی به مهاجرت خاص نیست.
+
+### Matching & auto-tagging
+- ماژول جدید `rules.py` با تابع خالص `match_tags(text, rules)` (substring، case-insensitive).
+- pipeline در هر سه مسیر ingest (متن کانال، transcript مدیا، Forwarded Inbox) بعد از ذخیره‌ی متن، قوانین owner را اعمال و تگ‌ها را ذخیره می‌کند (`_apply_rules`). `owner_id` به helperهای داخلی pipeline اضافه شد.
+
+### Bot commands
+- `/rule add <keyword> -> <tag>`، `/rule list`، `/rule remove <id>`، و `/rule apply` (پاک‌کردن و بازمحاسبه‌ی تگ‌ها از روی متن‌های ذخیره‌شده).
+- `/tags` — تگ‌ها و تعداد آیتم متمایز هر تگ.
+- فیلتر `--tag <tag>` برای `/search` و `/ask`. پارسر `_split_source` با `_split_filters` جایگزین شد که هم `--source` (تک‌توکن) و هم `--tag` (تا انتهای خط، چندکلمه‌ای) را می‌فهمد.
+- `/help` به‌روزرسانی شد.
+
+### Search
+- `SearchService.search` پارامتر `tag` گرفت. مسیر keyword با join روی `content_tags` فیلتر می‌شود؛ مسیر معنایی (Vertex) با allowlist از `media_ids_for_tag` پس‌فیلتر می‌شود.
+
+### Tests
+- `tests/test_rules.py`: تطبیق خالص، پارس `/rule add`، CRUD قوانین و یکتایی، ذخیره/شمارش تگ، تگ‌گذاری خودکار هنگام ingest، جستجوی فیلترشده با تگ، و backfill.
+- `tests/test_normalize.py`: تست `_split_filters` (به‌جای `_split_source`).
+
 ## Phase 4 — Forwarded Inbox (MVP) (2026-06-09)
 
 پیاده‌سازی فاز بعدی Roadmap: «Smart Telegram Inbox». حالا کاربر می‌تواند هر پیامی را به ربات فوروارد کند و متن/کپشن آن در یک inbox شخصی و قابل‌جستجو ذخیره می‌شود.
