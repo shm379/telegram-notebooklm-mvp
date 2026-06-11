@@ -59,6 +59,11 @@
 - داشبورد وب سبک با `Python http.server`
 - ربات تلگرام برای orchestration و دستورات اصلی
 - اتصال اکانت واقعی تلگرام کاربر با session string از طریق Telethon
+- **Forwarded Inbox**: فوروارد هر پیام به ربات، متن/کپشن آن را در inbox شخصی و قابل‌جستجوی کاربر ذخیره می‌کند
+- **Rule Engine + Tags**: تعریف قانون keyword→tag، تگ‌گذاری خودکار محتوای واردشده، و فیلتر `/search` و `/ask` با `--tag`
+- **Import Jobs**: import کامل کانال در background با صف، progress tracking، resume بعد از قطع‌شدن، و امکان لغو
+- **خلاصه‌سازی (NotebookLM)**: `/summarize` برای ساخت خلاصه‌ی ساختارمند از کل آرشیو، یک منبع خاص، یا یک تگ
+- **MCP Server (read-only)**: expose کردن آرشیو به ابزارهای AI با JSON-RPC روی stdio (`python -m telegram_notebook.mcp_server`)
 
 ---
 
@@ -124,7 +129,16 @@ Python Backend
 بررسی وضعیت اتصال
 
 /ingest <channel_url>
-ایندکس کردن کانال یا منبع تلگرامی
+ایندکس سریع و inline یک کانال
+
+/import <channel_url> [limit]
+صف‌کردن یک import کامل و resumable در background
+
+/jobs
+نمایش وضعیت و پیشرفت jobهای import
+
+/canceljob <id>
+لغو یک job در صف یا در حال اجرا
 
 /search <query>
 جستجو در آرشیو
@@ -132,17 +146,41 @@ Python Backend
 /search <query> --source <channel_url>
 جستجو فقط داخل یک منبع خاص
 
+/search <query> --tag <tag>
+جستجو فقط داخل محتوای تگ‌خورده
+
 /ask <question>
 پرسش از آرشیو با AI
 
 /ask <question> --source <channel_url>
 پرسش فقط از یک کانال یا منبع خاص
 
+/ask <question> --tag <tag>
+پرسش فقط از محتوای یک تگ خاص
+
+/summarize [--source <url>] [--tag <tag>]
+خلاصه‌سازی کل آرشیو، یک منبع، یا یک تگ
+
 /sources
 نمایش منابع ایندکس‌شده
 
 /delete <channel_url>
 حذف داده‌های یک منبع
+
+/rule add <keyword> -> <tag>
+تعریف قانون برای تگ‌گذاری خودکار محتوا
+
+/rule list
+نمایش قوانین
+
+/rule remove <id>
+حذف یک قانون
+
+/rule apply
+اعمال دوباره قوانین روی محتوای موجود (backfill)
+
+/tags
+نمایش تگ‌ها و تعداد آیتم هر تگ
 
 /cancel
 لغو flow فعلی
@@ -206,9 +244,9 @@ Telegram AI Archive
 
 ---
 
-## Rule Engine پیشنهادی
+## Rule Engine + Tags
 
-در نسخه‌های بعدی، کاربر باید بتواند قانون تعریف کند:
+کاربر می‌تواند قانون keyword→tag تعریف کند:
 
 ```text
 /rule add Claude -> AI Tools
@@ -217,42 +255,41 @@ Telegram AI Archive
 /rule add قیمت -> Leads
 ```
 
-هر محتوای جدیدی که وارد سیستم شود، از نظر متن، کپشن، OCR یا transcript بررسی می‌شود. اگر rule match شد:
+هر محتوای جدیدی که وارد سیستم شود (ingest کانال، transcript مدیا، یا Forwarded Inbox) از نظر متن و کپشن بررسی می‌شود. اگر keyword یک rule (به‌صورت substring و case-insensitive) در متن باشد:
 
-- به tag مربوطه وصل می‌شود
-- در collection جدا قرار می‌گیرد
-- در صورت نیاز به کانال آرشیو کاربر فوروارد می‌شود
-- بعداً در سؤال و جواب قابل فیلتر است
+- tag مربوطه به آن آیتم وصل می‌شود
+- بعداً با `/search ... --tag <tag>` و `/ask ... --tag <tag>` قابل فیلتر است
+- `/tags` تگ‌ها و تعداد آیتم هر تگ را نشان می‌دهد
+- `/rule apply` قوانین فعلی را روی محتوای موجود دوباره اعمال می‌کند (backfill)
+
+**هنوز اضافه نشده (follow-up):** قوانین AI-based و forward خودکار آیتم‌های match‌شده به یک کانال آرشیو.
 
 ---
 
-## MCP Roadmap
+## MCP Server
 
-یکی از مسیرهای مهم پروژه، ساخت یک **Telegram MCP Server** است تا آرشیو تلگرام کاربر فقط داخل ربات نماند و بتواند به ابزارهای AI دیگر وصل شود.
+یک **Telegram MCP Server** (read-only) پیاده‌سازی شده تا آرشیو تلگرام کاربر فقط داخل ربات نماند و به ابزارهای AI دیگر (Claude، Cursor، …) وصل شود. با JSON-RPC 2.0 روی stdio کار می‌کند و فقط با کتابخانه‌ی استاندارد نوشته شده (بدون وابستگی جدید).
 
-ابزارهای پیشنهادی MCP:
+اجرا:
 
-```text
-search_telegram_archive
-جستجو در آرشیو تلگرام
-
-ask_telegram_notebook
-پرسش و پاسخ از منابع ذخیره‌شده
-
-list_sources
-نمایش کانال‌ها، چت‌ها و inboxها
-
-list_tags
-نمایش tagها و collectionها
-
-get_message
-دریافت متن کامل یک پیام یا آیتم
-
-summarize_source
-خلاصه‌سازی یک کانال، چت یا collection
+```bash
+MCP_OWNER_ID=0 python -m telegram_notebook.mcp_server
 ```
 
-در فاز اول، MCP باید read-only باشد. ابزارهای حساس مثل import، forward، delete یا create_rule باید بعداً با permission و confirmation اضافه شوند.
+`MCP_OWNER_ID` تعیین می‌کند آرشیو کدام کاربر expose شود (پیش‌فرض `0` = آرشیو داشبورد وب؛ برای آرشیو یک کاربر ربات، `bot_user_id` او را بدهید).
+
+ابزارهای فعلی MCP:
+
+```text
+list_sources              نمایش کانال‌ها/چت‌ها و forwarded inbox
+list_tags                 نمایش تگ‌ها و تعداد آیتم هر تگ
+search_telegram_archive   جستجو (با فیلتر اختیاری source/tag)
+get_message               متن کامل یک آیتم با media_item_id
+ask_telegram_notebook     پرسش و پاسخ RAG از روی آرشیو
+summarize_source          خلاصه‌سازی کل آرشیو، یک منبع، یا یک تگ
+```
+
+همه‌ی ابزارها read-only هستند؛ ابزارهای حساس (import، forward، delete، create_rule) عمداً expose نشده‌اند و در صورت نیاز باید بعداً با permission و confirmation اضافه شوند.
 
 ---
 
@@ -332,12 +369,14 @@ python -m telegram_notebook.bot
 
 ## محدودیت‌های فعلی
 
-- سیستم هنوز برای multi-user production آماده نیست.
+- جداسازی داده بین کاربران انجام شده است (هر کاربر فقط دیتای خودش را می‌بیند؛ مالکیت با `owner_id` روی کانال‌ها اعمال می‌شود).
+- احراز هویت Web API با `WEB_API_TOKEN` و رمزنگاری secrets در دیتابیس با `SECRETS_KEY` اضافه شده؛ برای production هر دو متغیر را تنظیم کنید.
 - storage فعلی برای MVP مناسب است، نه دیتاست بزرگ.
 - session string و API keyها باید قبل از production رمزنگاری شوند.
-- import کانال فعلاً batch/job queue کامل ندارد.
-- progress tracking برای ingestهای طولانی هنوز کامل نیست.
-- forwarded inbox و rule engine هنوز باید به شکل کامل اضافه شوند.
+- import کامل کانال با صف، progress و resume از طریق `/import` پشتیبانی می‌شود (یک worker در background)؛ هنوز یک sandbox تست برای کل مسیر Telethon وجود ندارد.
+- Forwarded Inbox فعلاً فقط متن/کپشن پیام‌های فورواردشده را ایندکس می‌کند؛ دانلود و transcription مدیا، OCR عکس و استخراج متن از PDF/DOCX هنوز اضافه نشده.
+- Rule Engine بر اساس تطبیق keyword (substring) است؛ قوانین AI-based و forward خودکار به کانال آرشیو هنوز اضافه نشده.
+- `/summarize` خلاصه‌ی per-source/per-tag/کل آرشیو می‌سازد؛ topic clustering و timeline خودکار هنوز اضافه نشده.
 - برای دیتاست بزرگ بهتر است به PostgreSQL + pgvector یا Qdrant مهاجرت شود.
 
 ---

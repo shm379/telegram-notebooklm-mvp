@@ -5,6 +5,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -12,8 +13,10 @@ from .bot_api import TelegramBotApi
 from .config import Settings, get_settings
 from .db import Repository, connect
 from .embeddings import EmbeddingService
+from .jobs import JobWorker
 from .logging_config import setup_logging
 from .pipeline import IngestionPipeline
+from .rules import match_tags
 from .search import SearchService
 from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
 from .transcription import TranscriptionService
@@ -101,9 +104,11 @@ class NotebookBot:
         self.executor = ThreadPoolExecutor(max_workers=4)
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        self.worker = JobWorker(self.services.repository, self._run_import_job)
 
     def run_forever(self) -> None:
         logger.info("Bot polling started")
+        self.worker.start()
         while True:
             try:
                 updates = self.services.api.get_updates(offset=self.offset, timeout=30)
@@ -190,11 +195,16 @@ class NotebookBot:
             return
 
         text = str(message.get("text", "")).strip()
-        if not text:
-            return
 
         if text.startswith("/"):
             self._handle_command(chat_id, bot_user_id, text)
+            return
+
+        if self._is_forwarded(message):
+            self._handle_forwarded(chat_id, bot_user_id, message)
+            return
+
+        if not text:
             return
 
         flow = self.services.repository.get_auth_flow(bot_user_id=bot_user_id)
@@ -241,28 +251,52 @@ class NotebookBot:
             self.services.repository.clear_auth_flow(bot_user_id=bot_user_id)
             self.services.api.send_message(chat_id=chat_id, text="Operation cancelled.", reply_markup=TelegramBotApi.remove_keyboard())
         elif command == "/search":
-            query, source = self._split_source(text.removeprefix("/search").strip())
-            self._search(chat_id, bot_user_id, query, source)
+            query, source, tag = self._split_filters(text.removeprefix("/search").strip())
+            self._search(chat_id, bot_user_id, query, source, tag)
         elif command == "/ask":
-            query, source = self._split_source(text.removeprefix("/ask").strip())
-            self._ask_brain(chat_id, bot_user_id, query, source)
+            query, source, tag = self._split_filters(text.removeprefix("/ask").strip())
+            self._ask_brain(chat_id, bot_user_id, query, source, tag)
+        elif command == "/rule":
+            self._handle_rule(chat_id, bot_user_id, text.removeprefix("/rule").strip())
+        elif command == "/tags":
+            self._handle_tags(chat_id, bot_user_id)
+        elif command == "/summarize":
+            self._handle_summarize(chat_id, bot_user_id, text.removeprefix("/summarize").strip())
         elif command == "/join":
             self._handle_join(chat_id, bot_user_id, text.removeprefix("/join").strip())
         elif command == "/ingest":
             self._handle_ingest(chat_id, bot_user_id, text.removeprefix("/ingest").strip())
+        elif command == "/import":
+            self._handle_import(chat_id, bot_user_id, text.removeprefix("/import").strip())
+        elif command == "/jobs":
+            self._handle_jobs(chat_id, bot_user_id)
+        elif command == "/canceljob":
+            self._handle_cancel_job(chat_id, bot_user_id, text.removeprefix("/canceljob").strip())
         elif command == "/sources":
-            self._handle_sources(chat_id)
+            self._handle_sources(chat_id, bot_user_id)
         elif command == "/delete":
-            self._handle_delete(chat_id, text.removeprefix("/delete").strip())
+            self._handle_delete(chat_id, bot_user_id, text.removeprefix("/delete").strip())
         else:
             self.services.api.send_message(chat_id=chat_id, text="Unknown command. Send /help to see what I can do.")
 
     @staticmethod
-    def _split_source(query: str) -> tuple[str, str | None]:
-        if " --source " in query:
-            head, _, tail = query.partition(" --source ")
-            return head.strip(), (tail.strip() or None)
-        return query.strip(), None
+    def _split_filters(text: str) -> tuple[str, str | None, str | None]:
+        """Parse a query with optional ``--source <url>`` (single token) and
+        ``--tag <tag>`` (rest of line, may contain spaces) filters."""
+        tokens = text.split()
+        source = None
+        if "--source" in tokens:
+            idx = tokens.index("--source")
+            if idx + 1 < len(tokens):
+                source = tokens[idx + 1]
+                del tokens[idx:idx + 2]
+        remaining = " ".join(tokens)
+        tag = None
+        head, sep, tail = remaining.partition("--tag")
+        if sep:
+            tag = tail.strip() or None
+            remaining = head
+        return remaining.strip(), source, tag
 
     def _send_welcome(self, chat_id: int) -> None:
         self.services.api.send_message(
@@ -270,6 +304,7 @@ class NotebookBot:
             text=(
                 "Welcome! I'm your AI Research Assistant.\n"
                 "Use /connect to link your account and configure Vertex AI.\n"
+                "Forward me any message to save it to your searchable inbox.\n"
                 "Send /help to see all commands."
             ),
         )
@@ -280,12 +315,25 @@ class NotebookBot:
             "/connect — link your Telegram account and configure AI\n"
             "/status — show your connection and indexing status\n"
             "/disconnect — remove your saved session and credentials\n"
-            "/ingest &lt;channel_url&gt; — index a channel or source\n"
-            "/search &lt;query&gt; [--source &lt;url&gt;] — keyword/semantic search\n"
-            "/ask &lt;question&gt; [--source &lt;url&gt;] — ask the AI over your archive\n"
+            "/ingest &lt;channel_url&gt; — index a channel now (quick, inline)\n"
+            "/import &lt;channel_url&gt; [limit] — queue a full, resumable import\n"
+            "/jobs — show your import jobs and progress\n"
+            "/canceljob &lt;id&gt; — cancel a queued/running import\n"
+            "/search &lt;query&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — keyword/semantic search\n"
+            "/ask &lt;question&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — ask the AI over your archive\n"
+            "/summarize [--source &lt;url&gt;] [--tag &lt;tag&gt;] — summarize a source, tag, or your whole archive\n"
             "/sources — list indexed sources\n"
             "/delete &lt;channel_url&gt; — delete a source's data\n"
-            "/cancel — cancel the current flow"
+            "/cancel — cancel the current flow\n\n"
+            "<b>Rules &amp; tags</b>\n"
+            "/rule add &lt;keyword&gt; -&gt; &lt;tag&gt; — auto-tag matching content\n"
+            "/rule list — show your rules\n"
+            "/rule remove &lt;id&gt; — delete a rule\n"
+            "/rule apply — re-tag existing content with current rules\n"
+            "/tags — list your tags and their counts\n\n"
+            "<b>Forwarded Inbox</b>\n"
+            "Forward any message to me and I'll save its text/caption to your "
+            "searchable inbox. Then use /search or /ask over it."
         )
         self.services.api.send_message(chat_id=chat_id, text=help_text)
 
@@ -296,7 +344,7 @@ class NotebookBot:
         vertex_ready = bool(
             (user.get("vertex_project_id") if user else None) or self.services.settings.vertex_project_id
         )
-        sources_count = len(self.services.repository.list_channels())
+        sources_count = len(self.services.repository.list_channels(owner_id=bot_user_id))
         lines = [
             "<b>Status</b>",
             f"• Account linked: {'✅ yes' if connected else '❌ no (use /connect)'}",
@@ -440,15 +488,138 @@ class NotebookBot:
             }
         return None
 
-    def _search(self, chat_id: int, bot_user_id: int, query: str, source: str | None) -> None:
+    def _vertex_ingest_config(self, user: dict | None) -> dict | None:
+        """Build a Vertex AI upsert config (used while indexing) from per-user data."""
+        s = self.services.settings
+        v_project = (user.get("vertex_project_id") if user else None) or s.vertex_project_id
+        v_region = (user.get("vertex_region") if user else None) or s.vertex_region
+        v_index_id = (user.get("vertex_index_id") if user else None) or s.vertex_index_id
+        if v_project and v_region and v_index_id:
+            return {
+                "api_key": (user.get("gemini_api_key") if user else None) or s.gemini_api_key,
+                "project_id": v_project,
+                "region": v_region,
+                "index_id": v_index_id,
+            }
+        return None
+
+    @staticmethod
+    def _is_forwarded(message: dict) -> bool:
+        return any(
+            key in message
+            for key in ("forward_origin", "forward_from", "forward_from_chat", "forward_sender_name", "forward_date")
+        )
+
+    @staticmethod
+    def _forward_source_label(message: dict) -> str:
+        origin = message.get("forward_origin")
+        if isinstance(origin, dict):
+            otype = origin.get("type")
+            if otype == "user":
+                u = origin.get("sender_user") or {}
+                name = " ".join(p for p in (u.get("first_name"), u.get("last_name")) if p)
+                return name or u.get("username") or "Unknown user"
+            if otype == "hidden_user":
+                return origin.get("sender_user_name") or "Hidden user"
+            if otype == "chat":
+                c = origin.get("sender_chat") or {}
+                return c.get("title") or c.get("username") or "Unknown chat"
+            if otype == "channel":
+                c = origin.get("chat") or {}
+                return c.get("title") or c.get("username") or "Unknown channel"
+        ffc = message.get("forward_from_chat")
+        if isinstance(ffc, dict):
+            return ffc.get("title") or ffc.get("username") or "Unknown chat"
+        ff = message.get("forward_from")
+        if isinstance(ff, dict):
+            name = " ".join(p for p in (ff.get("first_name"), ff.get("last_name")) if p)
+            return name or ff.get("username") or "Unknown user"
+        if message.get("forward_sender_name"):
+            return str(message["forward_sender_name"])
+        return "Forwarded"
+
+    @staticmethod
+    def _forward_message_url(message: dict) -> str | None:
+        """Public t.me link when the forward came from a public channel, else None."""
+        origin = message.get("forward_origin")
+        if isinstance(origin, dict) and origin.get("type") == "channel":
+            chat = origin.get("chat") or {}
+            if chat.get("username") and origin.get("message_id"):
+                return f"https://t.me/{chat['username']}/{origin['message_id']}"
+        ffc = message.get("forward_from_chat")
+        if isinstance(ffc, dict) and ffc.get("username") and message.get("forward_from_message_id"):
+            return f"https://t.me/{ffc['username']}/{message['forward_from_message_id']}"
+        return None
+
+    @staticmethod
+    def _forward_media_tag(message: dict) -> str | None:
+        if "photo" in message:
+            return "[Forwarded photo]"
+        if "document" in message:
+            name = (message.get("document") or {}).get("file_name")
+            return f"[Forwarded document: {name}]" if name else "[Forwarded document]"
+        if "video" in message:
+            return "[Forwarded video]"
+        if "audio" in message:
+            audio = message.get("audio") or {}
+            title = audio.get("title") or audio.get("file_name")
+            return f"[Forwarded audio: {title}]" if title else "[Forwarded audio]"
+        if "voice" in message:
+            return "[Forwarded voice message]"
+        return None
+
+    def _handle_forwarded(self, chat_id: int, bot_user_id: int, message: dict) -> None:
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        label = self._forward_source_label(message)
+        raw_text = str(message.get("text") or message.get("caption") or "").strip()
+        media_tag = self._forward_media_tag(message)
+        body = "\n".join(part for part in (media_tag, raw_text) if part).strip()
+        if not body:
+            self.services.api.send_message(
+                chat_id,
+                "I couldn't extract any text from that forward yet. Media-only items "
+                "(photos or files without a caption) aren't indexed in this version.",
+            )
+            return
+
+        forward_key = int(message["message_id"])
+        message_url = self._forward_message_url(message)
+        vertex_config = self._vertex_ingest_config(user)
+
+        async def _do():
+            pipeline = IngestionPipeline(
+                settings=self.services.settings,
+                repository=self.services.repository,
+                transcription=self._transcription_service_for_user(user),
+                embeddings=self._embedding_service_for_user(user),
+            )
+            stored = await pipeline.ingest_forwarded_message(
+                owner_id=bot_user_id,
+                source_label=label,
+                text=body,
+                forward_key=forward_key,
+                message_url=message_url,
+                vertex_config=vertex_config,
+            )
+            if stored:
+                return f"Saved to your inbox from “{label}”. Use /search or /ask to query it."
+            return "You've already saved this forward."
+
+        try:
+            self.services.api.send_message(chat_id, self._async_to_sync(_do()))
+        except Exception as e:
+            logger.exception("Forward ingest failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, f"Error saving forward: {e}")
+
+    def _search(self, chat_id: int, bot_user_id: int, query: str, source: str | None, tag: str | None = None) -> None:
         if not query:
-            self.services.api.send_message(chat_id=chat_id, text="Usage: /search <query> [--source <url>]")
+            self.services.api.send_message(chat_id=chat_id, text="Usage: /search <query> [--source <url>] [--tag <tag>]")
             return
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
         vertex_config = self._vertex_search_config(user)
         try:
             results = self._search_service_for_user(user).search(
-                query=query, channel_url=source, top_k=5, vertex_config=vertex_config
+                owner_id=bot_user_id, query=query, channel_url=source, tag=tag, top_k=5, vertex_config=vertex_config
             )
         except Exception:
             logger.exception("Search failed for user %s", bot_user_id)
@@ -460,9 +631,9 @@ class NotebookBot:
             resp = [f"{r.channel_title}\n{r.chunk_text[:300]}\n{r.message_url}" for r in results]
             self.services.api.send_message(chat_id=chat_id, text="\n\n".join(resp))
 
-    def _ask_brain(self, chat_id: int, bot_user_id: int, query: str, source: str | None) -> None:
+    def _ask_brain(self, chat_id: int, bot_user_id: int, query: str, source: str | None, tag: str | None = None) -> None:
         if not query:
-            self.services.api.send_message(chat_id=chat_id, text="Usage: /ask <question> [--source <url>]")
+            self.services.api.send_message(chat_id=chat_id, text="Usage: /ask <question> [--source <url>] [--tag <tag>]")
             return
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
         gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
@@ -473,7 +644,7 @@ class NotebookBot:
         self.services.api.send_message(chat_id=chat_id, text="AI Brain is thinking...")
         try:
             search_service = self._search_service_for_user(user)
-            results = search_service.search(query=query, channel_url=source, top_k=5, vertex_config=vertex_config)
+            results = search_service.search(owner_id=bot_user_id, query=query, channel_url=source, tag=tag, top_k=5, vertex_config=vertex_config)
             answer = search_service.generate_answer(
                 query=query,
                 results=results,
@@ -491,21 +662,120 @@ class NotebookBot:
             sources_text = "\n".join([f"- {r.channel_title or r.channel_url} ({r.message_url})" for r in results[:3]])
             self.services.api.send_message(chat_id=chat_id, text=f"<b>Sources:</b>\n{sources_text}", disable_web_page_preview=True)
 
-    def _handle_sources(self, chat_id: int) -> None:
-        ch = self.services.repository.list_channels()
+    def _handle_sources(self, chat_id: int, bot_user_id: int) -> None:
+        ch = self.services.repository.list_channels(owner_id=bot_user_id)
         if not ch:
             self.services.api.send_message(chat_id, "No sources indexed.")
         else:
             self.services.api.send_message(chat_id, "\n".join([f"{c.get('channel_title') or 'Unknown'}: {c['channel_url']}" for c in ch]))
 
-    def _handle_delete(self, chat_id: int, link: str) -> None:
+    def _handle_delete(self, chat_id: int, bot_user_id: int, link: str) -> None:
         if not link:
             self.services.api.send_message(chat_id, "Usage: /delete <channel_url>")
             return
-        if self.services.repository.delete_channel_data(channel_url=link):
+        if self.services.repository.delete_channel_data(owner_id=bot_user_id, channel_url=link):
             self.services.api.send_message(chat_id, "Deleted.")
         else:
             self.services.api.send_message(chat_id, "Not found.")
+
+    @staticmethod
+    def _parse_rule_add(rest: str) -> tuple[str, str] | None:
+        if "->" not in rest:
+            return None
+        keyword, _, tag = rest.partition("->")
+        keyword, tag = keyword.strip(), tag.strip()
+        if not keyword or not tag:
+            return None
+        return keyword, tag
+
+    def _handle_rule(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        parts = args.split(maxsplit=1)
+        sub = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub == "add":
+            parsed = self._parse_rule_add(rest)
+            if not parsed:
+                self.services.api.send_message(chat_id, "Usage: /rule add <keyword> -> <tag>")
+                return
+            keyword, tag = parsed
+            self.services.repository.add_rule(
+                owner_id=bot_user_id, keyword=keyword, tag=tag,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            self.services.api.send_message(chat_id, f"Rule added: “{keyword}” → {tag}\nRun /rule apply to tag existing items.")
+        elif sub in ("", "list"):
+            rules = self.services.repository.list_rules(owner_id=bot_user_id)
+            if not rules:
+                self.services.api.send_message(chat_id, "No rules yet. Add one with: /rule add <keyword> -> <tag>")
+                return
+            lines = ["<b>Your rules</b>"] + [f"#{r['id']}: “{r['keyword']}” → {r['tag']}" for r in rules]
+            self.services.api.send_message(chat_id, "\n".join(lines))
+        elif sub == "remove":
+            try:
+                rule_id = int(rest)
+            except ValueError:
+                self.services.api.send_message(chat_id, "Usage: /rule remove <rule_id>")
+                return
+            if self.services.repository.remove_rule(owner_id=bot_user_id, rule_id=rule_id):
+                self.services.api.send_message(chat_id, f"Rule #{rule_id} removed. Run /rule apply to refresh tags.")
+            else:
+                self.services.api.send_message(chat_id, "Rule not found.")
+        elif sub == "apply":
+            self._retag_all(chat_id, bot_user_id)
+        else:
+            self.services.api.send_message(chat_id, "Usage: /rule add|list|remove|apply")
+
+    def _retag_all(self, chat_id: int, bot_user_id: int) -> None:
+        """Recompute tags for all of the user's stored content from the current rules."""
+        rules = self.services.repository.list_rules(owner_id=bot_user_id)
+        self.services.repository.clear_tags(owner_id=bot_user_id)
+        tagged = 0
+        for item in self.services.repository.media_texts(owner_id=bot_user_id):
+            tags = match_tags(item.get("text"), rules)
+            if tags:
+                self.services.repository.tag_media(owner_id=bot_user_id, media_item_id=item["media_item_id"], tags=tags)
+                tagged += 1
+        self.services.api.send_message(chat_id, f"Re-tagged {tagged} item(s) using {len(rules)} rule(s).")
+
+    def _handle_summarize(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        _, source, tag = self._split_filters(args)
+        items = self.services.repository.summary_items(owner_id=bot_user_id, channel_url=source, tag=tag)
+        if not items:
+            self.services.api.send_message(
+                chat_id,
+                "Nothing to summarize yet. Ingest a channel, forward messages, or check your /sources and /tags.",
+            )
+            return
+        scope_label = tag or source or "your whole archive"
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
+        vertex_config = self._vertex_search_config(user)
+        v_project = vertex_config["project_id"] if vertex_config else self.services.settings.vertex_project_id
+        v_region = vertex_config["region"] if vertex_config else self.services.settings.vertex_region
+
+        self.services.api.send_message(chat_id, f"Summarizing {scope_label} ({len(items)} item(s))...")
+        try:
+            answer = self._search_service_for_user(user).summarize(
+                scope_label=scope_label,
+                items=items,
+                api_key=gemini_api_key,
+                project_id=v_project,
+                region=v_region,
+            )
+        except Exception:
+            logger.exception("Summarize failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, "Sorry, I couldn't generate a summary right now. Please try again later.")
+            return
+        self.services.api.send_message(chat_id, f"<b>Summary — {scope_label}</b>\n\n{answer}")
+
+    def _handle_tags(self, chat_id: int, bot_user_id: int) -> None:
+        tags = self.services.repository.list_tags(owner_id=bot_user_id)
+        if not tags:
+            self.services.api.send_message(chat_id, "No tags yet. Define rules with /rule add, then ingest or run /rule apply.")
+            return
+        lines = ["<b>Your tags</b>"] + [f"{t['tag']}: {t['count']}" for t in tags]
+        self.services.api.send_message(chat_id, "\n".join(lines))
 
     def _handle_join(self, chat_id: int, bot_user_id: int, link: str) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
@@ -528,6 +798,102 @@ class NotebookBot:
             logger.exception("Join failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, f"Error: {e}")
 
+    def _handle_import(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        if not user or not user.get("session_string"):
+            self.services.api.send_message(chat_id, "Please /connect first.")
+            return
+        parts = args.split()
+        if not parts:
+            self.services.api.send_message(chat_id, "Usage: /import <channel_url> [limit]")
+            return
+        url = parts[0]
+        limit: int | None = None
+        if len(parts) > 1:
+            try:
+                limit = int(parts[1])
+            except ValueError:
+                self.services.api.send_message(chat_id, "Limit must be a number.")
+                return
+        job_id = self.services.repository.create_job(
+            owner_id=bot_user_id, channel_url=url, limit=limit,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        scope = f"up to {limit}" if limit else "all"
+        self.services.api.send_message(
+            chat_id, f"Queued import #{job_id} for {url} ({scope} messages). Track it with /jobs."
+        )
+
+    def _handle_jobs(self, chat_id: int, bot_user_id: int) -> None:
+        jobs = self.services.repository.list_jobs(owner_id=bot_user_id, limit=10)
+        if not jobs:
+            self.services.api.send_message(chat_id, "No import jobs yet. Start one with /import <channel_url>.")
+            return
+        lines = ["<b>Recent imports</b>"]
+        for job in jobs:
+            total = job.get("total")
+            progress = f"{job.get('processed', 0)}/{total}" if total else str(job.get("processed", 0))
+            line = f"#{job['id']} — {job['status']} — {job['channel_url']} ({progress})"
+            if job.get("error"):
+                line += f"\n  ⚠️ {str(job['error'])[:140]}"
+            lines.append(line)
+        lines.append("\nCancel a running import with /canceljob <id>.")
+        self.services.api.send_message(chat_id, "\n".join(lines))
+
+    def _handle_cancel_job(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        try:
+            job_id = int(args.strip())
+        except ValueError:
+            self.services.api.send_message(chat_id, "Usage: /canceljob <id>")
+            return
+        if self.services.repository.request_job_cancel(owner_id=bot_user_id, job_id=job_id):
+            self.services.api.send_message(chat_id, f"Cancellation requested for import #{job_id}. It will stop shortly.")
+        else:
+            self.services.api.send_message(chat_id, "No active job with that id.")
+
+    def _run_import_job(self, job: dict, on_progress, is_cancelled) -> None:
+        """Runner invoked by the JobWorker thread to execute one import job."""
+        owner_id = job["owner_id"]
+        user = self.services.repository.get_bot_user(bot_user_id=owner_id)
+        if not user or not user.get("session_string"):
+            raise RuntimeError("Account not connected. Use /connect before importing.")
+        chat_id = user.get("chat_id")
+        pipeline = IngestionPipeline(
+            settings=self.services.settings,
+            repository=self.services.repository,
+            transcription=self._transcription_service_for_user(user),
+            embeddings=self._embedding_service_for_user(user),
+        )
+
+        async def _do():
+            return await pipeline.ingest_channel(
+                owner_id=owner_id,
+                channel_url=job["channel_url"],
+                limit=job.get("limit_count"),
+                api_id=user.get("api_id"),
+                api_hash=user.get("api_hash"),
+                session_string=user["session_string"],
+                vertex_config=self._vertex_ingest_config(user),
+                resume_from=int(job.get("cursor") or 0),
+                progress_cb=on_progress,
+                should_cancel=is_cancelled,
+            )
+
+        try:
+            stats = asyncio.run(_do())
+        except Exception as exc:
+            if chat_id:
+                self.services.api.send_message(chat_id, f"Import #{job['id']} failed: {exc}")
+            raise
+
+        if chat_id:
+            if is_cancelled():
+                self.services.api.send_message(chat_id, f"Import #{job['id']} cancelled.")
+            else:
+                self.services.api.send_message(
+                    chat_id, f"Import #{job['id']} complete: indexed {stats.processed_media} item(s) from {stats.channel_title or stats.channel_url}."
+                )
+
     def _handle_ingest(self, chat_id: int, bot_user_id: int, link: str) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
         if not user or not user["session_string"]:
@@ -539,18 +905,7 @@ class NotebookBot:
 
         self.services.api.send_message(chat_id, "Ingesting messages...")
 
-        v_project = user.get("vertex_project_id") or self.services.settings.vertex_project_id
-        v_region = user.get("vertex_region") or self.services.settings.vertex_region
-        v_index_id = user.get("vertex_index_id") or self.services.settings.vertex_index_id
-
-        vertex_config = None
-        if v_project and v_region and v_index_id:
-            vertex_config = {
-                "api_key": user.get("gemini_api_key") or self.services.settings.gemini_api_key,
-                "project_id": v_project,
-                "region": v_region,
-                "index_id": v_index_id,
-            }
+        vertex_config = self._vertex_ingest_config(user)
 
         async def _do():
             pipeline = IngestionPipeline(
@@ -560,6 +915,7 @@ class NotebookBot:
                 embeddings=self._embedding_service_for_user(user),
             )
             stats = await pipeline.ingest_channel(
+                owner_id=bot_user_id,
                 channel_url=link,
                 limit=100,
                 api_id=user.get("api_id"),

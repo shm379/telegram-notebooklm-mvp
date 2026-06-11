@@ -6,6 +6,22 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from .crypto import decrypt as _decrypt, encrypt as _encrypt
+
+
+# Columns holding secrets that are encrypted at rest (see crypto.py).
+_BOT_USER_SECRETS = ("api_hash", "session_string", "gemini_api_key")
+_AUTH_FLOW_SECRETS = ("api_hash", "session_string", "phone_code_hash")
+
+
+def _decrypt_row(row: dict[str, Any] | None, keys: tuple[str, ...]) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    for key in keys:
+        if key in row:
+            row[key] = _decrypt(row[key])
+    return row
+
 
 def connect(db_path: Path) -> Path:
     path = Path(db_path)
@@ -65,8 +81,9 @@ class Repository:
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS channels (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER,
                         telegram_id INTEGER,
-                        channel_url TEXT UNIQUE,
+                        channel_url TEXT,
                         channel_title TEXT,
                         channel_username TEXT
                     )
@@ -148,20 +165,92 @@ class Repository:
                         vertex_deployed_index_id TEXT
                     )
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS rules (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER,
+                        keyword TEXT,
+                        tag TEXT,
+                        created_at TEXT
+                    )
+                """)
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_owner_kw_tag ON rules(owner_id, keyword, tag)"
+                )
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS content_tags (
+                        owner_id INTEGER,
+                        media_item_id INTEGER,
+                        tag TEXT,
+                        PRIMARY KEY (owner_id, media_item_id, tag)
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS jobs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER,
+                        channel_url TEXT,
+                        status TEXT,
+                        total INTEGER,
+                        processed INTEGER DEFAULT 0,
+                        cursor INTEGER DEFAULT 0,
+                        limit_count INTEGER,
+                        error TEXT,
+                        cancel_requested INTEGER DEFAULT 0,
+                        created_at TEXT,
+                        updated_at TEXT
+                    )
+                """)
+                self._ensure_channel_owner(conn)
                 conn.commit()
 
-    def upsert_channel(self, *, telegram_id: int, channel_url: str, title: str | None, username: str | None) -> int:
+    @staticmethod
+    def _ensure_channel_owner(conn: sqlite3.Connection) -> None:
+        """Migrate older databases to per-user channel ownership.
+
+        Adds the ``owner_id`` column and replaces the global ``UNIQUE(channel_url)``
+        constraint with a composite ``UNIQUE(owner_id, channel_url)`` index so that
+        two users can independently ingest the same channel URL without sharing rows.
+        Legacy rows (created before ownership existed) keep ``owner_id = NULL`` and are
+        therefore invisible to per-user queries rather than leaking across users.
+        """
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(channels)").fetchall()]
+        if "owner_id" not in cols:
+            conn.execute("ALTER TABLE channels RENAME TO channels_legacy")
+            conn.execute("""
+                CREATE TABLE channels (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_id INTEGER,
+                    telegram_id INTEGER,
+                    channel_url TEXT,
+                    channel_title TEXT,
+                    channel_username TEXT
+                )
+            """)
+            conn.execute("""
+                INSERT INTO channels (id, owner_id, telegram_id, channel_url, channel_title, channel_username)
+                SELECT id, NULL, telegram_id, channel_url, channel_title, channel_username FROM channels_legacy
+            """)
+            conn.execute("DROP TABLE channels_legacy")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_owner_url ON channels(owner_id, channel_url)"
+        )
+
+    def upsert_channel(self, *, owner_id: int, telegram_id: int, channel_url: str, title: str | None, username: str | None) -> int:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.execute("""
-                    INSERT INTO channels (telegram_id, channel_url, channel_title, channel_username)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(channel_url) DO UPDATE SET
+                    INSERT INTO channels (owner_id, telegram_id, channel_url, channel_title, channel_username)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(owner_id, channel_url) DO UPDATE SET
                         telegram_id=excluded.telegram_id,
                         channel_title=excluded.channel_title,
                         channel_username=excluded.channel_username
-                """, (telegram_id, channel_url, title, username))
-                res = conn.execute("SELECT id FROM channels WHERE channel_url = ?", (channel_url,)).fetchone()
+                """, (owner_id, telegram_id, channel_url, title, username))
+                res = conn.execute(
+                    "SELECT id FROM channels WHERE owner_id = ? AND channel_url = ?",
+                    (owner_id, channel_url),
+                ).fetchone()
                 return res[0]
 
     def create_or_get_message(self, *, channel_id: int, telegram_message_id: int, message_date: str | None, message_url: str | None, caption: str | None) -> int:
@@ -223,7 +312,7 @@ class Repository:
                 res = conn.execute("SELECT transcript_status FROM media_items WHERE id = ?", (media_item_id,)).fetchone()
                 return res and res[0] == 'done'
 
-    def keyword_candidates(self, *, query: str, top_k: int, channel_url: str | None) -> list[dict[str, Any]]:
+    def keyword_candidates(self, *, owner_id: int, query: str, top_k: int, channel_url: str | None, tag: str | None = None) -> list[dict[str, Any]]:
         # جستجوی متنی سریع در SQLite
         with self.lock:
             with sqlite3.connect(self.path) as conn:
@@ -234,17 +323,22 @@ class Repository:
                     JOIN media_items mi ON c.media_item_id = mi.id
                     JOIN messages m ON mi.message_id = m.id
                     JOIN channels ch ON m.channel_id = ch.id
-                    WHERE c.text LIKE ?
+                    WHERE ch.owner_id = ? AND c.text LIKE ?
                 """
-                params = [f"%{query}%"]
+                params: list[Any] = [owner_id, f"%{query}%"]
                 if channel_url:
                     sql += " AND ch.channel_url = ?"
                     params.append(channel_url)
-                
-                rows = conn.execute(sql + f" LIMIT {top_k}", params).fetchall()
+                if tag:
+                    sql += """ AND mi.id IN (
+                        SELECT media_item_id FROM content_tags WHERE owner_id = ? AND tag = ?
+                    )"""
+                    params.extend([owner_id, tag])
+
+                rows = conn.execute(sql + " LIMIT ?", params + [top_k]).fetchall()
                 return [dict(r) for r in rows]
 
-    def embedding_candidates(self, *, channel_url: str | None) -> list[dict[str, Any]]:
+    def embedding_candidates(self, *, owner_id: int, channel_url: str | None) -> list[dict[str, Any]]:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -255,13 +349,13 @@ class Repository:
                     JOIN media_items mi ON c.media_item_id = mi.id
                     JOIN messages m ON mi.message_id = m.id
                     JOIN channels ch ON m.channel_id = ch.id
-                    WHERE c.embedding IS NOT NULL
+                    WHERE c.embedding IS NOT NULL AND ch.owner_id = ?
                 """
-                params = []
+                params: list[Any] = [owner_id]
                 if channel_url:
                     sql += " AND ch.channel_url = ?"
                     params.append(channel_url)
-                
+
                 rows = conn.execute(sql, params).fetchall()
                 results = []
                 for r in rows:
@@ -271,16 +365,21 @@ class Repository:
                     results.append(d)
                 return results
 
-    def list_channels(self) -> list[dict[str, Any]]:
+    def list_channels(self, *, owner_id: int) -> list[dict[str, Any]]:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
-                return [dict(r) for r in conn.execute("SELECT * FROM channels").fetchall()]
+                return [dict(r) for r in conn.execute(
+                    "SELECT * FROM channels WHERE owner_id = ?", (owner_id,)
+                ).fetchall()]
 
-    def delete_channel_data(self, *, channel_url: str) -> bool:
+    def delete_channel_data(self, *, owner_id: int, channel_url: str) -> bool:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
-                res = conn.execute("SELECT id FROM channels WHERE channel_url = ?", (channel_url,)).fetchone()
+                res = conn.execute(
+                    "SELECT id FROM channels WHERE owner_id = ? AND channel_url = ?",
+                    (owner_id, channel_url),
+                ).fetchone()
                 if not res: return False
                 cid = res[0]
                 conn.execute("DELETE FROM chunks WHERE media_item_id IN (SELECT id FROM media_items WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?))", (cid,))
@@ -290,7 +389,7 @@ class Repository:
                 conn.commit()
                 return True
 
-    def get_chunk_by_media_and_index(self, media_item_id: int, chunk_index: int) -> dict[str, Any] | None:
+    def get_chunk_by_media_and_index(self, *, owner_id: int, media_item_id: int, chunk_index: int) -> dict[str, Any] | None:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -301,8 +400,8 @@ class Repository:
                     JOIN media_items mi ON c.media_item_id = mi.id
                     JOIN messages m ON mi.message_id = m.id
                     JOIN channels ch ON m.channel_id = ch.id
-                    WHERE c.media_item_id = ? AND c.chunk_index = ?
-                """, (media_item_id, chunk_index)).fetchone()
+                    WHERE c.media_item_id = ? AND c.chunk_index = ? AND ch.owner_id = ?
+                """, (media_item_id, chunk_index, owner_id)).fetchone()
                 return dict(row) if row else None
 
     def upsert_bot_user(
@@ -317,14 +416,14 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 """, (bot_user_id, chat_id, username, first_name))
                 conn.commit()
                 conn.row_factory = sqlite3.Row
-                return dict(conn.execute("SELECT * FROM bot_users WHERE bot_user_id = ?", (bot_user_id,)).fetchone())
+                return _decrypt_row(dict(conn.execute("SELECT * FROM bot_users WHERE bot_user_id = ?", (bot_user_id,)).fetchone()), _BOT_USER_SECRETS)
 
     def get_bot_user(self, *, bot_user_id: int) -> dict[str, Any] | None:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
                 res = conn.execute("SELECT * FROM bot_users WHERE bot_user_id = ?", (bot_user_id,)).fetchone()
-                return dict(res) if res else None
+                return _decrypt_row(dict(res), _BOT_USER_SECRETS) if res else None
 
     def disconnect_bot_user(self, *, bot_user_id: int) -> bool:
         """Remove a user's session and credentials. Returns True if a session existed."""
@@ -362,12 +461,12 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                     UPDATE bot_users SET phone=?, api_id=?, api_hash=?, session_string=?, connected_at=?,
                                        vertex_project_id=?, vertex_region=?, vertex_index_id=?, vertex_endpoint_id=?, vertex_deployed_index_id=?
                     WHERE bot_user_id=?
-                """, (phone, api_id, api_hash, session_string, connected_at, v_project, v_region, v_index, v_endpoint, v_deployed, bot_user_id))
+                """, (phone, api_id, _encrypt(api_hash), _encrypt(session_string), connected_at, v_project, v_region, v_index, v_endpoint, v_deployed, bot_user_id))
 
     def update_user_gemini_key(self, *, bot_user_id: int, api_key: str) -> None:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
-                conn.execute("UPDATE bot_users SET gemini_api_key = ? WHERE bot_user_id = ?", (api_key, bot_user_id))
+                conn.execute("UPDATE bot_users SET gemini_api_key = ? WHERE bot_user_id = ?", (_encrypt(api_key), bot_user_id))
 
     def update_user_models(self, bot_user_id: int, transcription_model: str, embedding_model: str) -> None:
         with self.lock:
@@ -389,10 +488,10 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                         vertex_project_id=excluded.vertex_project_id, vertex_region=excluded.vertex_region,
                         vertex_index_id=excluded.vertex_index_id, vertex_endpoint_id=excluded.vertex_endpoint_id,
                         vertex_deployed_index_id=excluded.vertex_deployed_index_id
-                """, (bot_user_id, chat_id, phone, api_id, api_hash, session_string, phone_code_hash, status, v_project, v_region, v_index, v_endpoint, v_deployed))
+                """, (bot_user_id, chat_id, phone, api_id, _encrypt(api_hash), _encrypt(session_string), _encrypt(phone_code_hash), status, v_project, v_region, v_index, v_endpoint, v_deployed))
                 conn.commit()
                 conn.row_factory = sqlite3.Row
-                return dict(conn.execute("SELECT * FROM auth_flows WHERE bot_user_id = ?", (bot_user_id,)).fetchone())
+                return _decrypt_row(dict(conn.execute("SELECT * FROM auth_flows WHERE bot_user_id = ?", (bot_user_id,)).fetchone()), _AUTH_FLOW_SECRETS)
 
     def update_auth_flow_status(self, *, bot_user_id: int, status: str) -> None:
         with self.lock:
@@ -404,9 +503,239 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
                 res = conn.execute("SELECT * FROM auth_flows WHERE bot_user_id = ?", (bot_user_id,)).fetchone()
-                return dict(res) if res else None
+                return _decrypt_row(dict(res), _AUTH_FLOW_SECRETS) if res else None
 
     def clear_auth_flow(self, *, bot_user_id: int) -> None:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.execute("DELETE FROM auth_flows WHERE bot_user_id = ?", (bot_user_id,))
+
+    # --- Rules & tags ------------------------------------------------------
+
+    def add_rule(self, *, owner_id: int, keyword: str, tag: str, created_at: str | None = None) -> int:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO rules (owner_id, keyword, tag, created_at) VALUES (?, ?, ?, ?)",
+                    (owner_id, keyword, tag, created_at),
+                )
+                conn.commit()
+                res = conn.execute(
+                    "SELECT id FROM rules WHERE owner_id = ? AND keyword = ? AND tag = ?",
+                    (owner_id, keyword, tag),
+                ).fetchone()
+                return res[0] if res else 0
+
+    def list_rules(self, *, owner_id: int) -> list[dict[str, Any]]:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                return [dict(r) for r in conn.execute(
+                    "SELECT id, keyword, tag FROM rules WHERE owner_id = ? ORDER BY id", (owner_id,)
+                ).fetchall()]
+
+    def remove_rule(self, *, owner_id: int, rule_id: int) -> bool:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cur = conn.execute(
+                    "DELETE FROM rules WHERE owner_id = ? AND id = ?", (owner_id, rule_id)
+                )
+                conn.commit()
+                return cur.rowcount > 0
+
+    def tag_media(self, *, owner_id: int, media_item_id: int, tags: set[str] | list[str]) -> None:
+        if not tags:
+            return
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO content_tags (owner_id, media_item_id, tag) VALUES (?, ?, ?)",
+                    [(owner_id, media_item_id, tag) for tag in tags],
+                )
+                conn.commit()
+
+    def list_tags(self, *, owner_id: int) -> list[dict[str, Any]]:
+        """Tags with the number of distinct content items each one covers."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                return [dict(r) for r in conn.execute(
+                    """
+                    SELECT tag, COUNT(DISTINCT media_item_id) AS count
+                    FROM content_tags WHERE owner_id = ?
+                    GROUP BY tag ORDER BY count DESC, tag
+                    """,
+                    (owner_id,),
+                ).fetchall()]
+
+    def media_ids_for_tag(self, *, owner_id: int, tag: str) -> set[int]:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                return {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT media_item_id FROM content_tags WHERE owner_id = ? AND tag = ?",
+                        (owner_id, tag),
+                    ).fetchall()
+                }
+
+    def clear_tags(self, *, owner_id: int) -> None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute("DELETE FROM content_tags WHERE owner_id = ?", (owner_id,))
+                conn.commit()
+
+    def media_texts(self, *, owner_id: int) -> list[dict[str, Any]]:
+        """Every stored media item for the owner with its transcript/text, for re-tagging."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                return [dict(r) for r in conn.execute(
+                    """
+                    SELECT mi.id AS media_item_id, mi.transcript_text AS text
+                    FROM media_items mi
+                    JOIN messages m ON mi.message_id = m.id
+                    JOIN channels ch ON m.channel_id = ch.id
+                    WHERE ch.owner_id = ? AND mi.transcript_text IS NOT NULL
+                    """,
+                    (owner_id,),
+                ).fetchall()]
+
+    def get_media_item(self, *, owner_id: int, media_item_id: int) -> dict[str, Any] | None:
+        """Full stored text of a single content item (owner-scoped)."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    """
+                    SELECT mi.transcript_text AS text, mi.media_kind, mi.file_name,
+                           m.message_url, m.caption, ch.channel_title, ch.channel_url
+                    FROM media_items mi
+                    JOIN messages m ON mi.message_id = m.id
+                    JOIN channels ch ON m.channel_id = ch.id
+                    WHERE mi.id = ? AND ch.owner_id = ?
+                    """,
+                    (media_item_id, owner_id),
+                ).fetchone()
+                return dict(row) if row else None
+
+    def summary_items(self, *, owner_id: int, channel_url: str | None = None, tag: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        """One row per stored content item (with its text and source), for summarization.
+        Optionally scoped to a single source (``channel_url``) and/or ``tag``."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                sql = """
+                    SELECT mi.transcript_text AS text, ch.channel_title, ch.channel_url, m.message_url
+                    FROM media_items mi
+                    JOIN messages m ON mi.message_id = m.id
+                    JOIN channels ch ON m.channel_id = ch.id
+                    WHERE ch.owner_id = ? AND mi.transcript_text IS NOT NULL AND mi.transcript_text != ''
+                """
+                params: list[Any] = [owner_id]
+                if channel_url:
+                    sql += " AND ch.channel_url = ?"
+                    params.append(channel_url)
+                if tag:
+                    sql += " AND mi.id IN (SELECT media_item_id FROM content_tags WHERE owner_id = ? AND tag = ?)"
+                    params.extend([owner_id, tag])
+                sql += " ORDER BY m.id LIMIT ?"
+                params.append(limit)
+                return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+    # --- Import jobs (queue / progress / resume) ---------------------------
+
+    def create_job(self, *, owner_id: int, channel_url: str, limit: int | None, created_at: str | None = None) -> int:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cur = conn.execute(
+                    """
+                    INSERT INTO jobs (owner_id, channel_url, status, processed, cursor, limit_count, cancel_requested, created_at, updated_at)
+                    VALUES (?, ?, 'queued', 0, 0, ?, 0, ?, ?)
+                    """,
+                    (owner_id, channel_url, limit, created_at, created_at),
+                )
+                conn.commit()
+                return cur.lastrowid
+
+    def get_job(self, *, job_id: int, owner_id: int | None = None) -> dict[str, Any] | None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                if owner_id is None:
+                    res = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                else:
+                    res = conn.execute("SELECT * FROM jobs WHERE id = ? AND owner_id = ?", (job_id, owner_id)).fetchone()
+                return dict(res) if res else None
+
+    def list_jobs(self, *, owner_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                return [dict(r) for r in conn.execute(
+                    "SELECT * FROM jobs WHERE owner_id = ? ORDER BY id DESC LIMIT ?", (owner_id, limit)
+                ).fetchall()]
+
+    def claim_next_queued_job(self, *, updated_at: str | None = None) -> dict[str, Any] | None:
+        """Atomically pick the oldest queued job and mark it running."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT * FROM jobs WHERE status = 'queued' ORDER BY id LIMIT 1"
+                ).fetchone()
+                if not row:
+                    return None
+                conn.execute(
+                    "UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?",
+                    (updated_at, row["id"]),
+                )
+                conn.commit()
+                job = dict(row)
+                job["status"] = "running"
+                return job
+
+    def update_job_progress(self, *, job_id: int, processed: int, total: int | None, cursor: int | None, updated_at: str | None = None) -> None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "UPDATE jobs SET processed = ?, total = ?, cursor = ?, updated_at = ? WHERE id = ?",
+                    (processed, total, cursor, updated_at, job_id),
+                )
+                conn.commit()
+
+    def finish_job(self, *, job_id: int, status: str, error: str | None = None, updated_at: str | None = None) -> None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "UPDATE jobs SET status = ?, error = ?, updated_at = ? WHERE id = ?",
+                    (status, error, updated_at, job_id),
+                )
+                conn.commit()
+
+    def request_job_cancel(self, *, owner_id: int, job_id: int) -> bool:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cur = conn.execute(
+                    "UPDATE jobs SET cancel_requested = 1 WHERE id = ? AND owner_id = ? AND status IN ('queued', 'running')",
+                    (job_id, owner_id),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+
+    def is_cancel_requested(self, *, job_id: int) -> bool:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                res = conn.execute("SELECT cancel_requested FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                return bool(res and res[0])
+
+    def requeue_running_jobs(self, *, updated_at: str | None = None) -> int:
+        """Reset jobs left 'running' by a crashed worker back to 'queued' so they resume."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cur = conn.execute(
+                    "UPDATE jobs SET status = 'queued', updated_at = ? WHERE status = 'running'",
+                    (updated_at,),
+                )
+                conn.commit()
+                return cur.rowcount

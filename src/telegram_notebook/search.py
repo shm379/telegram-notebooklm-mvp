@@ -55,16 +55,55 @@ class SearchService:
             region=region
         )
 
+    @staticmethod
+    def _build_summary_prompt(scope_label: str, items: list[dict[str, Any]], per_item_chars: int = 1500) -> str:
+        parts = []
+        for i, item in enumerate(items, 1):
+            source = item.get("channel_title") or item.get("channel_url") or "Unknown Source"
+            text = (item.get("text") or "").strip()[:per_item_chars]
+            parts.append(f"[{i}] ({source}) {text}")
+        context = "\n\n".join(parts)
+        return f"""شما یک دستیار هوشمند هستید که آرشیو تلگرام کاربر را خلاصه می‌کنید.
+بر اساس آیتم‌های زیر، یک خلاصه‌ی ساختارمند و مفید درباره‌ی «{scope_label}» بنویسید.
+خلاصه باید شامل موضوعات اصلی، نکات کلیدی و در صورت امکان دسته‌بندی مطالب باشد.
+فقط بر اساس همین آیتم‌ها بنویسید و چیزی از خودتان اضافه نکنید.
+
+آیتم‌ها:
+{context}
+
+خلاصه (به زبان فارسی، با تیترها و bullet در صورت نیاز):"""
+
+    def summarize(
+        self,
+        *,
+        scope_label: str,
+        items: list[dict[str, Any]],
+        api_key: str | None = None,
+        project_id: str | None = None,
+        region: str = "us-central1",
+    ) -> str:
+        if not items:
+            return "موردی برای خلاصه‌سازی پیدا نشد."
+        prompt = self._build_summary_prompt(scope_label, items)
+        return gemini_generate_content(
+            api_key=api_key,
+            prompt=prompt,
+            project_id=project_id,
+            region=region,
+        )
+
     def search(
         self,
         *,
+        owner_id: int,
         query: str,
         channel_url: str | None = None,
+        tag: str | None = None,
         top_k: int = 5,
         vertex_config: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
         if not self.embeddings.enabled:
-            rows = self.repository.keyword_candidates(query=query, top_k=top_k, channel_url=channel_url)
+            rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url, tag=tag)
             return [SearchResult(score=1.0, **r) for r in rows]
 
         v_proj = vertex_config.get("project_id") if vertex_config else None
@@ -80,8 +119,10 @@ class SearchService:
             logger.warning("Embedding query failed; falling back to keyword search", exc_info=True)
             query_vector = None
         if not query_vector:
-            rows = self.repository.keyword_candidates(query=query, top_k=top_k, channel_url=channel_url)
+            rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url, tag=tag)
             return [SearchResult(score=1.0, **r) for r in rows]
+
+        allowed_media_ids = self.repository.media_ids_for_tag(owner_id=owner_id, tag=tag) if tag else None
 
         if vertex_config and vertex_config.get("index_endpoint_id"):
             try:
@@ -104,7 +145,11 @@ class SearchService:
                     if len(id_parts) >= 3:
                         media_item_id = int(id_parts[1])
                         chunk_index = int(id_parts[2])
-                        chunk = self.repository.get_chunk_by_media_and_index(media_item_id, chunk_index)
+                        if allowed_media_ids is not None and media_item_id not in allowed_media_ids:
+                            continue
+                        chunk = self.repository.get_chunk_by_media_and_index(
+                            owner_id=owner_id, media_item_id=media_item_id, chunk_index=chunk_index
+                        )
                         if chunk:
                             # Avoid duplicates based on message_url
                             if chunk["message_url"] in seen_messages:
@@ -129,7 +174,7 @@ class SearchService:
                 logger.exception("Vertex AI search failed; falling back to keyword search")
 
         # Fallback to keyword search for now
-        rows = self.repository.keyword_candidates(query=query, top_k=top_k, channel_url=channel_url)
+        rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url, tag=tag)
         return [SearchResult(score=1.0, 
                              channel_title=r.get("channel_title"),
                              channel_url=r.get("channel_url"),

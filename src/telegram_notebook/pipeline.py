@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -9,10 +10,15 @@ from .chunking import split_text
 from .config import Settings
 from .db import Repository
 from .embeddings import EmbeddingService
+from .rules import match_tags
 from .transcription import TranscriptionService
 
 
 logger = logging.getLogger(__name__)
+
+# Synthetic source that collects messages a user forwards to the bot.
+FORWARDED_INBOX_URL = "inbox://forwarded"
+FORWARDED_INBOX_TITLE = "Forwarded Inbox"
 
 
 @dataclass(slots=True)
@@ -41,12 +47,16 @@ class IngestionPipeline:
     async def ingest_channel(
         self,
         *,
+        owner_id: int,
         channel_url: str,
-        limit: int,
+        limit: int | None,
         api_id: int | None = None,
         api_hash: str | None = None,
         session_string: str | None = None,
         vertex_config: dict[str, str] | None = None,
+        resume_from: int = 0,
+        progress_cb=None,
+        should_cancel=None,
     ) -> IngestStats:
         from .telegram_client import (
             build_client,
@@ -67,6 +77,7 @@ class IngestionPipeline:
         async with client:
             channel = await fetch_channel_info(client, channel_url)
             channel_id = self.repository.upsert_channel(
+                owner_id=owner_id,
                 telegram_id=channel.telegram_id,
                 channel_url=channel.canonical_url,
                 title=channel.title,
@@ -77,10 +88,17 @@ class IngestionPipeline:
                 channel_title=channel.title,
             )
 
-            messages = await iter_all_messages(client, channel_url=channel_url, limit=limit)
+            messages = await iter_all_messages(
+                client, channel_url=channel_url, limit=limit, min_id=resume_from
+            )
             stats.processed_messages = len(messages)
+            total = len(messages)
 
-            for msg in messages:
+            for index, msg in enumerate(messages, 1):
+                if should_cancel is not None and should_cancel():
+                    logger.info("Ingest of %s cancelled after %s messages", channel_url, index - 1)
+                    break
+
                 message_id = self.repository.create_or_get_message(
                     channel_id=channel_id,
                     telegram_message_id=msg.telegram_message_id,
@@ -90,12 +108,11 @@ class IngestionPipeline:
                 )
 
                 if msg.media_kind == "text" and msg.caption:
-                    await self._process_text_message(message_id, msg.caption, vertex_config)
+                    await self._process_text_message(owner_id, message_id, msg.caption, vertex_config)
                     stats.processed_media += 1
-                    continue
-
-                if msg.media_kind in {"audio", "video"}:
+                elif msg.media_kind in {"audio", "video"}:
                     processed = await self._process_media_message(
+                        owner_id=owner_id,
                         client=client,
                         channel_url=channel.canonical_url,
                         message_id=message_id,
@@ -106,11 +123,71 @@ class IngestionPipeline:
                         stats.processed_media += 1
                     else:
                         stats.skipped_media += 1
-                    continue
+
+                # Record progress and a resume cursor (messages arrive oldest-first,
+                # so the latest processed id is the highest seen so far).
+                if progress_cb is not None:
+                    progress_cb(index, total, msg.telegram_message_id)
 
             return stats
 
-    async def _process_text_message(self, message_id: int, text: str, vertex_config: dict | None = None) -> None:
+    async def ingest_forwarded_message(
+        self,
+        *,
+        owner_id: int,
+        source_label: str,
+        text: str,
+        forward_key: int,
+        message_url: str | None = None,
+        message_date: str | None = None,
+        vertex_config: dict | None = None,
+    ) -> bool:
+        """Store a message the user forwarded to the bot into their Forwarded Inbox.
+
+        The inbox is a per-user synthetic channel, so forwarded content becomes
+        searchable through the same /search and /ask paths as ingested channels.
+        Returns False when the item was already stored (idempotent on ``forward_key``).
+        """
+        channel_id = self.repository.upsert_channel(
+            owner_id=owner_id,
+            telegram_id=0,
+            channel_url=FORWARDED_INBOX_URL,
+            title=FORWARDED_INBOX_TITLE,
+            username=None,
+        )
+        message_id = self.repository.create_or_get_message(
+            channel_id=channel_id,
+            telegram_message_id=forward_key,
+            message_date=message_date or datetime.now(timezone.utc).isoformat(),
+            message_url=message_url,
+            caption=source_label,
+        )
+        media_id = self.repository.create_or_get_media(
+            message_id=message_id,
+            file_name=source_label,
+            file_path="",
+            mime_type="text/plain",
+            media_kind="forward",
+            duration_seconds=None,
+            file_size_bytes=len(text.encode("utf-8")),
+        )
+        if self.repository.media_already_transcribed(media_id):
+            return False
+        await self._process_text_data(media_item_id=media_id, text=text, vertex_config=vertex_config)
+        self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=text)
+        self._apply_rules(owner_id, media_id, text)
+        return True
+
+    def _apply_rules(self, owner_id: int, media_item_id: int, text: str) -> None:
+        """Auto-tag a stored item by matching the owner's keyword rules against its text."""
+        rules = self.repository.list_rules(owner_id=owner_id)
+        if not rules:
+            return
+        tags = match_tags(text, rules)
+        if tags:
+            self.repository.tag_media(owner_id=owner_id, media_item_id=media_item_id, tags=tags)
+
+    async def _process_text_message(self, owner_id: int, message_id: int, text: str, vertex_config: dict | None = None) -> None:
         media_id = self.repository.create_or_get_media(
             message_id=message_id,
             file_name="text_message",
@@ -124,10 +201,12 @@ class IngestionPipeline:
             return
         await self._process_text_data(media_id, text, vertex_config)
         self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=text)
+        self._apply_rules(owner_id, media_id, text)
 
     async def _process_media_message(
         self,
         *,
+        owner_id: int,
         client: object,
         channel_url: str,
         message_id: int,
@@ -171,6 +250,7 @@ class IngestionPipeline:
 
         await self._process_text_data(media_item_id=media_id, text=combined_text, vertex_config=vertex_config)
         self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=combined_text)
+        self._apply_rules(owner_id, media_id, combined_text)
         return True
 
     async def _process_text_data(self, media_item_id: int, text: str, vertex_config: dict | None = None) -> None:

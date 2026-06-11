@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import threading
@@ -20,6 +21,11 @@ from .transcription import TranscriptionService
 
 
 logger = logging.getLogger(__name__)
+
+# The web dashboard has no per-user login, so all of its data lives under a
+# single fixed owner id. This keeps the dashboard's archive isolated from the
+# per-user (bot_user_id) archives created through the Telegram bot.
+WEB_OWNER_ID = 0
 
 
 @dataclass(slots=True)
@@ -374,8 +380,25 @@ INDEX_HTML = """
         }
       }
 
+      function withToken(options) {
+        const opts = { ...(options || {}) };
+        opts.headers = { ...(opts.headers || {}) };
+        const token = localStorage.getItem("apiToken");
+        if (token) {
+          opts.headers["X-API-Token"] = token;
+        }
+        return opts;
+      }
+
       async function fetchJson(url, options = undefined) {
-        const response = await fetch(url, options);
+        let response = await fetch(url, withToken(options));
+        if (response.status === 401) {
+          const token = window.prompt("This API requires a token (WEB_API_TOKEN). Enter it:");
+          if (token) {
+            localStorage.setItem("apiToken", token.trim());
+            response = await fetch(url, withToken(options));
+          }
+        }
         const data = await response.json();
         if (!response.ok) {
           throw new Error(data.detail || "Request failed");
@@ -531,6 +554,39 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _client_is_loopback(self) -> bool:
+        host = self.client_address[0] if self.client_address else ""
+        return host in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+
+    def _presented_token(self) -> str | None:
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            return auth[len("Bearer "):].strip()
+        token = self.headers.get("X-API-Token")
+        return token.strip() if token else None
+
+    def _require_auth(self) -> bool:
+        """Guard for /api endpoints. Returns True if the request may proceed.
+
+        When WEB_API_TOKEN is configured, a matching bearer/X-API-Token is required.
+        When it is not configured, only loopback clients are allowed so the API is not
+        exposed unauthenticated over the network. Sends a 401 and returns False on failure.
+        """
+        configured = state.settings.web_api_token
+        if configured:
+            presented = self._presented_token()
+            if presented and hmac.compare_digest(presented, configured):
+                return True
+            self._send_json({"detail": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+            return False
+        if self._client_is_loopback():
+            return True
+        self._send_json(
+            {"detail": "Unauthorized: set WEB_API_TOKEN to allow non-local access to the API."},
+            status=HTTPStatus.UNAUTHORIZED,
+        )
+        return False
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         try:
@@ -547,9 +603,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             if parsed.path == "/api/settings":
+                if not self._require_auth():
+                    return
                 self._send_json(asdict(state.runtime_config()))
                 return
             if parsed.path == "/api/models":
+                if not self._require_auth():
+                    return
                 query = parse_qs(parsed.query)
                 provider = (query.get("provider", ["gemini"])[0] or "gemini").lower()
                 capability = query.get("capability", [None])[0]
@@ -569,6 +629,8 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if not self._require_auth():
+            return
         try:
             payload = self._read_json()
         except json.JSONDecodeError:
@@ -602,7 +664,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             try:
                 stats = asyncio.run(
-                    state.pipeline.ingest_channel(channel_url=channel_url, limit=limit)
+                    state.pipeline.ingest_channel(owner_id=WEB_OWNER_ID, channel_url=channel_url, limit=limit)
                 )
                 self._send_json(
                     {
@@ -627,6 +689,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             try:
                 results = state.search_service.search(
+                    owner_id=WEB_OWNER_ID,
                     query=query,
                     channel_url=str(channel_url).strip() if channel_url else None,
                     top_k=top_k,
@@ -653,6 +716,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 vertex_config = state.vertex_search_config()
                 # 1. Search for relevant chunks
                 results = state.search_service.search(
+                    owner_id=WEB_OWNER_ID,
                     query=query,
                     channel_url=str(channel_url).strip() if channel_url else None,
                     top_k=5,

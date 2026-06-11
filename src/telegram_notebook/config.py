@@ -53,6 +53,7 @@ class Settings:
     chunk_size: int
     chunk_overlap: int
     default_result_limit: int
+    web_api_token: str | None
 
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -98,6 +99,7 @@ def get_settings() -> Settings:
         chunk_size=_int_env("CHUNK_SIZE") or 900,
         chunk_overlap=_int_env("CHUNK_OVERLAP") or 120,
         default_result_limit=_int_env("DEFAULT_RESULT_LIMIT") or 8,
+        web_api_token=_str_env("WEB_API_TOKEN"),
     )
     settings.ensure_directories()
     return settings
