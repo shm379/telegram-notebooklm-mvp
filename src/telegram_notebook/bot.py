@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -619,21 +620,26 @@ class NotebookBot:
             self.services.api.send_message(chat_id, "You've already saved this forward.")
             return
 
-        reply = f"Saved to your inbox from “{label}”. Use /search or /ask to query it."
+        reply = f"Saved to your inbox from “{html.escape(label)}”. Use /search or /ask to query it."
         if self._auto_forward(user=user, label=label, tags=tags, text=body, message_url=message_url):
-            tag_str = ", ".join(f"#{t}" for t in sorted(tags))
+            tag_str = ", ".join(f"#{html.escape(t)}" for t in sorted(tags))
             reply += f"\nAuto-forwarded to your archive ({tag_str})."
         self.services.api.send_message(chat_id, reply)
 
     def _auto_forward(self, *, user: dict | None, label: str, tags: set[str], text: str, message_url: str | None) -> bool:
-        """Forward a tagged inbox item to the user's archive channel. Returns True if sent."""
+        """Forward a tagged inbox item to the user's archive channel. Returns True if sent.
+
+        Messages are sent with ``parse_mode: HTML``, so every user-controlled field
+        (source label, tags, text, link) is HTML-escaped — otherwise a literal ``<``,
+        ``>`` or ``&`` would break Telegram's parser and the forward would silently fail.
+        """
         archive = (user or {}).get("archive_chat_id")
         if not archive or not tags:
             return False
-        tag_str = " ".join(f"#{t}" for t in sorted(tags))
-        parts = [f"📥 <b>{label}</b>", tag_str, text[:1000]]
+        tag_str = " ".join(f"#{html.escape(t)}" for t in sorted(tags))
+        parts = [f"📥 <b>{html.escape(label)}</b>", tag_str, html.escape(text[:1000])]
         if message_url:
-            parts.append(message_url)
+            parts.append(html.escape(message_url))
         try:
             self.services.api.send_message(archive, "\n".join(p for p in parts if p))
             return True
