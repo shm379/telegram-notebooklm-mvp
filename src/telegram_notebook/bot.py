@@ -259,6 +259,8 @@ class NotebookBot:
             self._handle_rule(chat_id, bot_user_id, text.removeprefix("/rule").strip())
         elif command == "/tags":
             self._handle_tags(chat_id, bot_user_id)
+        elif command == "/setarchive":
+            self._handle_setarchive(chat_id, bot_user_id, text.removeprefix("/setarchive").strip())
         elif command == "/summarize":
             self._handle_summarize(chat_id, bot_user_id, text.removeprefix("/summarize").strip())
         elif command == "/topics":
@@ -332,7 +334,8 @@ class NotebookBot:
             "/rule list — show your rules\n"
             "/rule remove &lt;id&gt; — delete a rule\n"
             "/rule apply — re-tag existing content with current rules\n"
-            "/tags — list your tags and their counts\n\n"
+            "/tags — list your tags and their counts\n"
+            "/setarchive &lt;@channel|off&gt; — auto-forward tagged forwards to an archive channel\n\n"
             "<b>Forwarded Inbox</b>\n"
             "Forward any message to me and I'll save its text/caption to your "
             "searchable inbox. Then use /search or /ask over it."
@@ -587,15 +590,16 @@ class NotebookBot:
         forward_key = int(message["message_id"])
         message_url = self._forward_message_url(message)
         vertex_config = self._vertex_ingest_config(user)
+        tags = match_tags(body, self.services.repository.list_rules(owner_id=bot_user_id))
 
-        async def _do():
+        async def _do() -> bool:
             pipeline = IngestionPipeline(
                 settings=self.services.settings,
                 repository=self.services.repository,
                 transcription=self._transcription_service_for_user(user),
                 embeddings=self._embedding_service_for_user(user),
             )
-            stored = await pipeline.ingest_forwarded_message(
+            return await pipeline.ingest_forwarded_message(
                 owner_id=bot_user_id,
                 source_label=label,
                 text=body,
@@ -603,15 +607,39 @@ class NotebookBot:
                 message_url=message_url,
                 vertex_config=vertex_config,
             )
-            if stored:
-                return f"Saved to your inbox from “{label}”. Use /search or /ask to query it."
-            return "You've already saved this forward."
 
         try:
-            self.services.api.send_message(chat_id, self._async_to_sync(_do()))
+            stored = self._async_to_sync(_do())
         except Exception as e:
             logger.exception("Forward ingest failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, f"Error saving forward: {e}")
+            return
+
+        if not stored:
+            self.services.api.send_message(chat_id, "You've already saved this forward.")
+            return
+
+        reply = f"Saved to your inbox from “{label}”. Use /search or /ask to query it."
+        if self._auto_forward(user=user, label=label, tags=tags, text=body, message_url=message_url):
+            tag_str = ", ".join(f"#{t}" for t in sorted(tags))
+            reply += f"\nAuto-forwarded to your archive ({tag_str})."
+        self.services.api.send_message(chat_id, reply)
+
+    def _auto_forward(self, *, user: dict | None, label: str, tags: set[str], text: str, message_url: str | None) -> bool:
+        """Forward a tagged inbox item to the user's archive channel. Returns True if sent."""
+        archive = (user or {}).get("archive_chat_id")
+        if not archive or not tags:
+            return False
+        tag_str = " ".join(f"#{t}" for t in sorted(tags))
+        parts = [f"📥 <b>{label}</b>", tag_str, text[:1000]]
+        if message_url:
+            parts.append(message_url)
+        try:
+            self.services.api.send_message(archive, "\n".join(p for p in parts if p))
+            return True
+        except Exception:
+            logger.exception("Auto-forward to archive failed for user %s", user.get("bot_user_id") if user else None)
+            return False
 
     def _search(self, chat_id: int, bot_user_id: int, query: str, source: str | None, tag: str | None = None) -> None:
         if not query:
@@ -796,6 +824,35 @@ class NotebookBot:
             return
         lines = ["<b>Your tags</b>"] + [f"{t['tag']}: {t['count']}" for t in tags]
         self.services.api.send_message(chat_id, "\n".join(lines))
+
+    def _handle_setarchive(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        target = args.strip()
+        if not target:
+            current = (self.services.repository.get_bot_user(bot_user_id=bot_user_id) or {}).get("archive_chat_id")
+            if current:
+                self.services.api.send_message(
+                    chat_id,
+                    f"Your archive is <b>{current}</b>. Tagged forwards are auto-sent there.\n"
+                    "Use /setarchive off to disable, or /setarchive <@channel or chat id> to change it.",
+                )
+            else:
+                self.services.api.send_message(
+                    chat_id,
+                    "Usage: /setarchive &lt;@channel or chat id&gt;\n"
+                    "When set, any forward that matches a tag rule is auto-forwarded there. "
+                    "Add me to that channel as an admin first. Use /setarchive off to disable.",
+                )
+            return
+        if target.lower() in ("off", "none", "disable"):
+            self.services.repository.set_archive_chat(bot_user_id=bot_user_id, archive_chat_id=None)
+            self.services.api.send_message(chat_id, "Auto-forward archive disabled.")
+            return
+        self.services.repository.set_archive_chat(bot_user_id=bot_user_id, archive_chat_id=target)
+        self.services.api.send_message(
+            chat_id,
+            f"Archive set to <b>{target}</b>. Forwards that match a tag rule will be auto-forwarded there.\n"
+            "Make sure I'm an admin of that channel so I can post.",
+        )
 
     def _handle_join(self, chat_id: int, bot_user_id: int, link: str) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
