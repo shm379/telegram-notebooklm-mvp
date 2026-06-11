@@ -1,5 +1,10 @@
 # Changelog
 
+## Fix: HTML-escape archive forwards (2026-06-11)
+
+- چون `send_message` با `parse_mode: HTML` ارسال می‌کند، فیلدهای کاربر-کنترل (label منبع، tagها، متن، لینک) در auto-forward و پیام تأیید inbox حالا با `html.escape` فرار داده می‌شوند. پیش‌تر وجود `<`، `>` یا `&` باعث خطای parser تلگرام و در نتیجه نرسیدن بی‌صدای آیتم به کانال آرشیو می‌شد.
+- تست جدید در `tests/test_autoforward.py` که escape شدن این کاراکترها را بررسی می‌کند.
+
 ## Auto-forward to an archive channel (2026-06-11)
 
 forward خودکار آیتم‌های tag‌خورده به یک کانال آرشیو (از follow-up های Rule Engine).

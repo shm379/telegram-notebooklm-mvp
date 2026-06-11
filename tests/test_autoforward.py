@@ -46,6 +46,28 @@ def test_auto_forward_sends_when_archive_and_tags():
     assert "https://t.me/ainews/42" in text
 
 
+def test_auto_forward_escapes_html_in_user_fields():
+    # parse_mode is HTML, so <, > and & in user-controlled fields must be escaped
+    # or Telegram rejects the message and the archive send silently fails.
+    api = FakeApi()
+    ok = NotebookBot._auto_forward(
+        _bot(None, api),
+        user={"archive_chat_id": "@arch", "bot_user_id": 1},
+        label="A & B <News>",
+        tags={"R&D"},
+        text="price < 5 & rising > before",
+        message_url="https://t.me/c/1?a=1&b=2",
+    )
+    assert ok is True
+    text = api.sent[0][1]
+    assert "&amp;" in text and "&lt;" in text and "&gt;" in text
+    # no raw unescaped special chars from user fields leak into the markup
+    assert "A & B" not in text and "<News>" not in text
+    assert "price < 5" not in text
+    # our own intentional <b> wrapper is still present
+    assert "<b>" in text and "</b>" in text
+
+
 def test_auto_forward_skips_without_archive_or_tags():
     api = FakeApi()
     # no tags matched
