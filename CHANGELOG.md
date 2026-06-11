@@ -1,5 +1,24 @@
 # Changelog
 
+## CI — pytest + ruff (2026-06-11)
+
+افزودن یک pipeline یکپارچه‌سازی (CI) تا کد خراب به `main` نرود؛ پیش‌تر GitHub Actions فقط deploy می‌کرد.
+
+### CI
+- workflow جدید `.github/workflows/ci.yml` روی هر push و pull_request: نصب وابستگی‌ها، سپس `ruff check` و `pytest`.
+- کل سوییت (۷۳ تست) در CI اجرا می‌شود؛ `test_telegram_client` هم بدون نیاز به اجرای واقعی Telethon پاس می‌شود (importها lazy هستند).
+
+### Lint
+- پیکربندی `ruff` در `pyproject.toml` (rule set `E,F,I,UP,B`؛ `line-length=140`) و افزودن `ruff` به dev dependencies.
+- رفع همه‌ی یافته‌های lint: حذف importهای بلااستفاده، مرتب‌سازی importها، `datetime.UTC`، `zip(..., strict=True)` در مسیرهای crypto/cosine، `raise ... from` در except، و annotation امن `TelegramClient` زیر `TYPE_CHECKING`.
+
+### Run locally
+```bash
+pip install -e ".[dev]"
+ruff check src/ tests/
+pytest -q
+```
+
 ## Phase 8 — MCP Server (2026-06-09)
 
 فاز آخر Roadmap: یک MCP Server فقط-خواندنی تا آرشیو تلگرام کاربر به ابزارهای AI دیگر وصل شود.

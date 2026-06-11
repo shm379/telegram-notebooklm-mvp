@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import ssl
-from urllib import parse, request
 from pathlib import Path
+from urllib import request
 
 import certifi
 

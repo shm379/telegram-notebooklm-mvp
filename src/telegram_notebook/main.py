@@ -19,7 +19,6 @@ from .pipeline import IngestionPipeline
 from .search import SearchService
 from .transcription import TranscriptionService
 
-
 logger = logging.getLogger(__name__)
 
 # The web dashboard has no per-user login, so all of its data lives under a

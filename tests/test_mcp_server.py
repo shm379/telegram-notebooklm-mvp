@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from telegram_notebook.db import Repository
 from telegram_notebook.embeddings import EmbeddingService
-from telegram_notebook.mcp_server import McpServer, PROTOCOL_VERSION
+from telegram_notebook.mcp_server import PROTOCOL_VERSION, McpServer
 from telegram_notebook.pipeline import IngestionPipeline
 from telegram_notebook.search import SearchService
 
@@ -106,7 +106,7 @@ def test_serve_stdio_roundtrip(tmp_path):
     )
     stdout = io.StringIO()
     server.serve_stdio(stdin, stdout)
-    out_lines = [l for l in stdout.getvalue().splitlines() if l.strip()]
+    out_lines = [line for line in stdout.getvalue().splitlines() if line.strip()]
     # one response for tools/list, none for the notification
     assert len(out_lines) == 1
     assert json.loads(out_lines[0])["id"] == 1

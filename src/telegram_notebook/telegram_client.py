@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from .config import Settings
 from .media import detect_media_kind
+
+if TYPE_CHECKING:
+    from telethon import TelegramClient
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +42,6 @@ class MediaMessage:
 def build_client(settings: Settings) -> TelegramClient:
     from telethon import TelegramClient
     from telethon.sessions import StringSession
-    from telethon.network import ConnectionTcpFull
 
     if not settings.telegram_api_id or not settings.telegram_api_hash:
         raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH are required")
@@ -178,8 +180,8 @@ async def download_message_media(
 
 
 async def join_chat(client: Any, link: str) -> str:
-    from telethon.tl.functions.messages import ImportChatInviteRequest
     from telethon.tl.functions.channels import JoinChannelRequest
+    from telethon.tl.functions.messages import ImportChatInviteRequest
     
     # تمیز کردن لینک
     link = link.strip()
@@ -292,7 +294,7 @@ async def sign_in_with_code(
         return {
             "status": "authorized",
             "session_string": client.session.save(),
-            "connected_at": datetime.now(timezone.utc).isoformat(),
+            "connected_at": datetime.now(UTC).isoformat(),
         }
     except SessionPasswordNeededError:
         logger.debug("Two-step verification password required")
@@ -326,7 +328,7 @@ async def sign_in_with_password(
         return {
             "status": "authorized",
             "session_string": client.session.save(),
-            "connected_at": datetime.now(timezone.utc).isoformat(),
+            "connected_at": datetime.now(UTC).isoformat(),
         }
     except Exception:
         logger.exception("Failed to sign in with password")

@@ -7,7 +7,7 @@ pure function so it is easy to test and reuse across the ingest paths.
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 
 def match_tags(text: str | None, rules: Iterable[Mapping[str, str]]) -> set[str]:

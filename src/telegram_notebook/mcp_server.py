@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Callable
+from typing import Any
 
 from .config import get_settings
 from .db import Repository, connect
@@ -141,8 +141,8 @@ class McpServer:
     def _tool_get_message(self, args: dict) -> str:
         try:
             media_item_id = int(args["media_item_id"])
-        except (KeyError, ValueError, TypeError):
-            raise ValueError("media_item_id (integer) is required")
+        except (KeyError, ValueError, TypeError) as exc:
+            raise ValueError("media_item_id (integer) is required") from exc
         item = self.repository.get_media_item(owner_id=self.owner_id, media_item_id=media_item_id)
         if not item:
             return "Item not found."

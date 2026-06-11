@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import Any
 
 from .db import Repository
 from .embeddings import EmbeddingService
-from .provider_http import vertex_ai_search, gemini_generate_content
 from .models import SearchResult
-
+from .provider_http import gemini_generate_content, vertex_ai_search
 
 logger = logging.getLogger(__name__)
 

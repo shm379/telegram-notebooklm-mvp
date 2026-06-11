@@ -1,13 +1,10 @@
 import asyncio
 from types import SimpleNamespace
 
-import pytest
-
 from telegram_notebook.bot import NotebookBot
 from telegram_notebook.db import Repository
 from telegram_notebook.embeddings import EmbeddingService
-from telegram_notebook.pipeline import IngestionPipeline, FORWARDED_INBOX_URL
-
+from telegram_notebook.pipeline import FORWARDED_INBOX_URL, IngestionPipeline
 
 # --- Forward-detection / attribution helpers (pure functions) ---
 

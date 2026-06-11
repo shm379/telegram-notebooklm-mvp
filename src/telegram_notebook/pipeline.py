@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 from .chunking import split_text
@@ -12,7 +11,6 @@ from .db import Repository
 from .embeddings import EmbeddingService
 from .rules import match_tags
 from .transcription import TranscriptionService
-
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +156,7 @@ class IngestionPipeline:
         message_id = self.repository.create_or_get_message(
             channel_id=channel_id,
             telegram_message_id=forward_key,
-            message_date=message_date or datetime.now(timezone.utc).isoformat(),
+            message_date=message_date or datetime.now(UTC).isoformat(),
             message_url=message_url,
             caption=source_label,
         )

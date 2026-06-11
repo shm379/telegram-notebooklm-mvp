@@ -293,6 +293,16 @@ summarize_source          خلاصه‌سازی کل آرشیو، یک منبع�
 
 ---
 
+## توسعه و تست
+
+CI روی هر push و PR، lint و تست را اجرا می‌کند (`.github/workflows/ci.yml`). برای اجرای محلی:
+
+```bash
+pip install -e ".[dev]"
+ruff check src/ tests/
+pytest -q
+```
+
 ## نصب
 
 ```bash

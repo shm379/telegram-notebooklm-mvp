@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import time
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
 from .bot_api import TelegramBotApi
 from .config import Settings, get_settings
@@ -20,7 +19,6 @@ from .rules import match_tags
 from .search import SearchService
 from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
 from .transcription import TranscriptionService
-
 
 logger = logging.getLogger(__name__)
 
@@ -128,8 +126,8 @@ class NotebookBot:
     def _async_to_sync(self, coro, timeout: int = 60):
         try:
             return self.loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout))
-        except asyncio.TimeoutError:
-            raise RuntimeError("Operation timed out. Please check your connection or try again.")
+        except TimeoutError as exc:
+            raise RuntimeError("Operation timed out. Please check your connection or try again.") from exc
 
     def _api_key_for_user(self, user: dict | None, provider: str) -> str | None:
         if provider == "gemini":
@@ -701,7 +699,7 @@ class NotebookBot:
             keyword, tag = parsed
             self.services.repository.add_rule(
                 owner_id=bot_user_id, keyword=keyword, tag=tag,
-                created_at=datetime.now(timezone.utc).isoformat(),
+                created_at=datetime.now(UTC).isoformat(),
             )
             self.services.api.send_message(chat_id, f"Rule added: “{keyword}” → {tag}\nRun /rule apply to tag existing items.")
         elif sub in ("", "list"):
@@ -817,7 +815,7 @@ class NotebookBot:
                 return
         job_id = self.services.repository.create_job(
             owner_id=bot_user_id, channel_url=url, limit=limit,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
         )
         scope = f"up to {limit}" if limit else "all"
         self.services.api.send_message(

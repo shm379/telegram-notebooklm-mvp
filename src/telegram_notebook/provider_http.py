@@ -6,12 +6,11 @@ import logging
 import ssl
 import subprocess
 from pathlib import Path
-from urllib import parse, request
+from urllib import request
 
 import certifi
 
 from .media import guess_mime_type
-
 
 logger = logging.getLogger(__name__)
 
