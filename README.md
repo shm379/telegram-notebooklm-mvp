@@ -63,6 +63,7 @@
 - **Rule Engine + Tags**: تعریف قانون keyword→tag، تگ‌گذاری خودکار محتوای واردشده، و فیلتر `/search` و `/ask` با `--tag`
 - **Import Jobs**: import کامل کانال در background با صف، progress tracking، resume بعد از قطع‌شدن، و امکان لغو
 - **خلاصه‌سازی (NotebookLM)**: `/summarize` برای ساخت خلاصه‌ی ساختارمند از کل آرشیو، یک منبع خاص، یا یک تگ
+- **MCP Server (read-only)**: expose کردن آرشیو به ابزارهای AI با JSON-RPC روی stdio (`python -m telegram_notebook.mcp_server`)
 
 ---
 
@@ -265,33 +266,30 @@ Telegram AI Archive
 
 ---
 
-## MCP Roadmap
+## MCP Server
 
-یکی از مسیرهای مهم پروژه، ساخت یک **Telegram MCP Server** است تا آرشیو تلگرام کاربر فقط داخل ربات نماند و بتواند به ابزارهای AI دیگر وصل شود.
+یک **Telegram MCP Server** (read-only) پیاده‌سازی شده تا آرشیو تلگرام کاربر فقط داخل ربات نماند و به ابزارهای AI دیگر (Claude، Cursor، …) وصل شود. با JSON-RPC 2.0 روی stdio کار می‌کند و فقط با کتابخانه‌ی استاندارد نوشته شده (بدون وابستگی جدید).
 
-ابزارهای پیشنهادی MCP:
+اجرا:
 
-```text
-search_telegram_archive
-جستجو در آرشیو تلگرام
-
-ask_telegram_notebook
-پرسش و پاسخ از منابع ذخیره‌شده
-
-list_sources
-نمایش کانال‌ها، چت‌ها و inboxها
-
-list_tags
-نمایش tagها و collectionها
-
-get_message
-دریافت متن کامل یک پیام یا آیتم
-
-summarize_source
-خلاصه‌سازی یک کانال، چت یا collection
+```bash
+MCP_OWNER_ID=0 python -m telegram_notebook.mcp_server
 ```
 
-در فاز اول، MCP باید read-only باشد. ابزارهای حساس مثل import، forward، delete یا create_rule باید بعداً با permission و confirmation اضافه شوند.
+`MCP_OWNER_ID` تعیین می‌کند آرشیو کدام کاربر expose شود (پیش‌فرض `0` = آرشیو داشبورد وب؛ برای آرشیو یک کاربر ربات، `bot_user_id` او را بدهید).
+
+ابزارهای فعلی MCP:
+
+```text
+list_sources              نمایش کانال‌ها/چت‌ها و forwarded inbox
+list_tags                 نمایش تگ‌ها و تعداد آیتم هر تگ
+search_telegram_archive   جستجو (با فیلتر اختیاری source/tag)
+get_message               متن کامل یک آیتم با media_item_id
+ask_telegram_notebook     پرسش و پاسخ RAG از روی آرشیو
+summarize_source          خلاصه‌سازی کل آرشیو، یک منبع، یا یک تگ
+```
+
+همه‌ی ابزارها read-only هستند؛ ابزارهای حساس (import، forward، delete، create_rule) عمداً expose نشده‌اند و در صورت نیاز باید بعداً با permission و confirmation اضافه شوند.
 
 ---
 

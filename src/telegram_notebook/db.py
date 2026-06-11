@@ -601,6 +601,24 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                     (owner_id,),
                 ).fetchall()]
 
+    def get_media_item(self, *, owner_id: int, media_item_id: int) -> dict[str, Any] | None:
+        """Full stored text of a single content item (owner-scoped)."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    """
+                    SELECT mi.transcript_text AS text, mi.media_kind, mi.file_name,
+                           m.message_url, m.caption, ch.channel_title, ch.channel_url
+                    FROM media_items mi
+                    JOIN messages m ON mi.message_id = m.id
+                    JOIN channels ch ON m.channel_id = ch.id
+                    WHERE mi.id = ? AND ch.owner_id = ?
+                    """,
+                    (media_item_id, owner_id),
+                ).fetchone()
+                return dict(row) if row else None
+
     def summary_items(self, *, owner_id: int, channel_url: str | None = None, tag: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         """One row per stored content item (with its text and source), for summarization.
         Optionally scoped to a single source (``channel_url``) and/or ``tag``."""

@@ -1,5 +1,22 @@
 # Changelog
 
+## Phase 8 — MCP Server (2026-06-09)
+
+فاز آخر Roadmap: یک MCP Server فقط-خواندنی تا آرشیو تلگرام کاربر به ابزارهای AI دیگر وصل شود.
+
+### Behaviour
+- ماژول جدید `mcp_server.py`: JSON-RPC 2.0 روی stdio، فقط با کتابخانه‌ی استاندارد (بدون وابستگی جدید). `handle_request` تابع خالص dict→dict است و `serve_stdio` یک حلقه‌ی newline-delimited نازک روی آن.
+- متدهای پروتکل: `initialize` (protocolVersion، serverInfo، capabilities.tools)، `notifications/initialized` (بدون پاسخ)، `tools/list`، `tools/call`.
+- ابزارها (همه read-only): `list_sources`، `list_tags`، `search_telegram_archive` (با فیلتر source/tag)، `get_message` (متن کامل یک آیتم با `media_item_id`)، `ask_telegram_notebook` (RAG)، `summarize_source`.
+- scoped به یک owner از `MCP_OWNER_ID` (پیش‌فرض `0` = آرشیو وب). همه‌ی کوئری‌ها از ایزولاسیون `owner_id` عبور می‌کنند.
+- اجرا: `python -m telegram_notebook.mcp_server`.
+
+### Repository
+- متد جدید `get_media_item(owner_id, media_item_id)` برای ابزار `get_message`.
+
+### Tests
+- `tests/test_mcp_server.py`: initialize/tools-list، رفتار notification، خطای method ناشناخته، list_sources/search/get_message، ابزار ناشناخته (isError)، ایزولاسیون per-owner، و roundtrip کامل `serve_stdio`.
+
 ## Phase 7 — Summaries / NotebookLM (2026-06-09)
 
 خلاصه‌سازی آرشیو از Roadmap (summary per source و per tag).
