@@ -645,6 +645,41 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 params.append(limit)
                 return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
+    def chunks_with_embeddings(self, *, owner_id: int, channel_url: str | None = None, tag: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        """Chunks that have a stored embedding (with source), for offline topic clustering."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                sql = """
+                    SELECT c.text AS text, c.embedding AS embedding, ch.channel_title, ch.channel_url, m.message_url
+                    FROM chunks c
+                    JOIN media_items mi ON c.media_item_id = mi.id
+                    JOIN messages m ON mi.message_id = m.id
+                    JOIN channels ch ON m.channel_id = ch.id
+                    WHERE ch.owner_id = ? AND c.embedding IS NOT NULL
+                """
+                params: list[Any] = [owner_id]
+                if channel_url:
+                    sql += " AND ch.channel_url = ?"
+                    params.append(channel_url)
+                if tag:
+                    sql += " AND mi.id IN (SELECT media_item_id FROM content_tags WHERE owner_id = ? AND tag = ?)"
+                    params.extend([owner_id, tag])
+                sql += " ORDER BY c.id LIMIT ?"
+                params.append(limit)
+                rows = conn.execute(sql, params).fetchall()
+                items: list[dict[str, Any]] = []
+                for r in rows:
+                    d = dict(r)
+                    raw = d.pop("embedding")
+                    try:
+                        d["embedding"] = json.loads(raw.decode("utf-8")) if raw else None
+                    except (ValueError, AttributeError):
+                        d["embedding"] = None
+                    if d["embedding"]:
+                        items.append(d)
+                return items
+
     # --- Import jobs (queue / progress / resume) ---------------------------
 
     def create_job(self, *, owner_id: int, channel_url: str, limit: int | None, created_at: str | None = None) -> int:

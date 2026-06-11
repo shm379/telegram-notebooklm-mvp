@@ -63,6 +63,7 @@
 - **Rule Engine + Tags**: تعریف قانون keyword→tag، تگ‌گذاری خودکار محتوای واردشده، و فیلتر `/search` و `/ask` با `--tag`
 - **Import Jobs**: import کامل کانال در background با صف، progress tracking، resume بعد از قطع‌شدن، و امکان لغو
 - **خلاصه‌سازی (NotebookLM)**: `/summarize` برای ساخت خلاصه‌ی ساختارمند از کل آرشیو، یک منبع خاص، یا یک تگ
+- **Topic clustering**: `/topics` محتوای آرشیو را به‌صورت آفلاین (روی embeddingهای موجود) خوشه‌بندی موضوعی می‌کند
 - **MCP Server (read-only)**: expose کردن آرشیو به ابزارهای AI با JSON-RPC روی stdio (`python -m telegram_notebook.mcp_server`)
 
 ---
@@ -160,6 +161,9 @@ Python Backend
 
 /summarize [--source <url>] [--tag <tag>]
 خلاصه‌سازی کل آرشیو، یک منبع، یا یک تگ
+
+/topics [--source <url>] [--tag <tag>]
+خوشه‌بندی موضوعی محتوا
 
 /sources
 نمایش منابع ایندکس‌شده
@@ -287,6 +291,7 @@ search_telegram_archive   جستجو (با فیلتر اختیاری source/tag)
 get_message               متن کامل یک آیتم با media_item_id
 ask_telegram_notebook     پرسش و پاسخ RAG از روی آرشیو
 summarize_source          خلاصه‌سازی کل آرشیو، یک منبع، یا یک تگ
+list_topics               خوشه‌بندی موضوعی محتوا (آفلاین، از embeddingها)
 ```
 
 همه‌ی ابزارها read-only هستند؛ ابزارهای حساس (import، forward، delete، create_rule) عمداً expose نشده‌اند و در صورت نیاز باید بعداً با permission و confirmation اضافه شوند.
@@ -386,7 +391,7 @@ python -m telegram_notebook.bot
 - import کامل کانال با صف، progress و resume از طریق `/import` پشتیبانی می‌شود (یک worker در background)؛ هنوز یک sandbox تست برای کل مسیر Telethon وجود ندارد.
 - Forwarded Inbox فعلاً فقط متن/کپشن پیام‌های فورواردشده را ایندکس می‌کند؛ دانلود و transcription مدیا، OCR عکس و استخراج متن از PDF/DOCX هنوز اضافه نشده.
 - Rule Engine بر اساس تطبیق keyword (substring) است؛ قوانین AI-based و forward خودکار به کانال آرشیو هنوز اضافه نشده.
-- `/summarize` خلاصه‌ی per-source/per-tag/کل آرشیو می‌سازد؛ topic clustering و timeline خودکار هنوز اضافه نشده.
+- `/topics` خوشه‌بندی موضوعی را روی embeddingهای موجود انجام می‌دهد (greedy cosine، آفلاین)؛ نیازمند آن است که محتوا با کلید embedding ایندکس شده باشد. timeline خودکار و نام‌گذاری خوشه‌ها با LLM هنوز اضافه نشده.
 - برای دیتاست بزرگ بهتر است به PostgreSQL + pgvector یا Qdrant مهاجرت شود.
 
 ---

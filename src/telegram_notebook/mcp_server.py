@@ -19,6 +19,7 @@ import os
 import sys
 from typing import Any
 
+from .clustering import build_topics
 from .config import get_settings
 from .db import Repository, connect
 from .embeddings import EmbeddingService
@@ -98,6 +99,14 @@ class McpServer:
                 },
                 "handler": self._tool_summarize,
             },
+            "list_topics": {
+                "description": "Cluster the archive's content into topics (offline, from stored embeddings).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"source": {"type": "string"}, "tag": {"type": "string"}},
+                },
+                "handler": self._tool_list_topics,
+            },
         }
 
     # --- tool handlers (return plain text) ---
@@ -170,6 +179,15 @@ class McpServer:
             project_id=self.settings.vertex_project_id,
             region=self.settings.vertex_region or "us-central1",
         )
+
+    def _tool_list_topics(self, args: dict) -> str:
+        items = self.repository.chunks_with_embeddings(
+            owner_id=self.owner_id, channel_url=args.get("source") or None, tag=args.get("tag") or None
+        )
+        if not items:
+            return "No embedded content to cluster yet."
+        topics = build_topics(items)
+        return "\n".join(f"- {t['label']} ({t['size']})" for t in topics)
 
     def _tool_summarize(self, args: dict) -> str:
         source = args.get("source") or None

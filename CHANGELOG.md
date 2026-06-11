@@ -1,5 +1,21 @@
 # Changelog
 
+## Topic clustering (2026-06-11)
+
+خوشه‌بندی موضوعی محتوای آرشیو (از follow-up های NotebookLM).
+
+### Behaviour
+- ماژول جدید `clustering.py` (pure-Python، بدون وابستگی): خوشه‌بندی greedy تک‌پاس بر اساس شباهت کسینوسی نسبت به centroidهای متحرک، و `top_terms` برای ساخت برچسب خوشه از پرتکرارترین واژه‌های معنادار (با stopword چندزبانه). چون chunkها embedding ذخیره‌شده دارند، کاملاً آفلاین کار می‌کند.
+- `Repository.chunks_with_embeddings` chunkهای دارای embedding را (scoped به owner + source/tag) برمی‌گرداند و BLOB را decode می‌کند.
+- دستور ربات `/topics [--source <url>] [--tag <tag>]` و ابزار MCP `list_topics`.
+- `/help` و README به‌روزرسانی شدند.
+
+### Outside scope (follow-up)
+- نام‌گذاری خوشه‌ها با LLM و timeline خودکار.
+
+### Tests
+- `tests/test_clustering.py`: `top_terms`، جداسازی خوشه‌ها، سقف خوشه‌ها، رد آیتم‌های بدون embedding، برچسب/مرتب‌سازی `build_topics`، decode و scoping در `chunks_with_embeddings`، و ابزار MCP `list_topics`.
+
 ## CI — pytest + ruff (2026-06-11)
 
 افزودن یک pipeline یکپارچه‌سازی (CI) تا کد خراب به `main` نرود؛ پیش‌تر GitHub Actions فقط deploy می‌کرد.
