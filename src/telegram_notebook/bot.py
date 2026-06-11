@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .bot_api import TelegramBotApi
+from .clustering import build_topics
 from .config import Settings, get_settings
 from .db import Repository, connect
 from .embeddings import EmbeddingService
@@ -260,6 +261,8 @@ class NotebookBot:
             self._handle_tags(chat_id, bot_user_id)
         elif command == "/summarize":
             self._handle_summarize(chat_id, bot_user_id, text.removeprefix("/summarize").strip())
+        elif command == "/topics":
+            self._handle_topics(chat_id, bot_user_id, text.removeprefix("/topics").strip())
         elif command == "/join":
             self._handle_join(chat_id, bot_user_id, text.removeprefix("/join").strip())
         elif command == "/ingest":
@@ -320,6 +323,7 @@ class NotebookBot:
             "/search &lt;query&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — keyword/semantic search\n"
             "/ask &lt;question&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — ask the AI over your archive\n"
             "/summarize [--source &lt;url&gt;] [--tag &lt;tag&gt;] — summarize a source, tag, or your whole archive\n"
+            "/topics [--source &lt;url&gt;] [--tag &lt;tag&gt;] — cluster your content into topics\n"
             "/sources — list indexed sources\n"
             "/delete &lt;channel_url&gt; — delete a source's data\n"
             "/cancel — cancel the current flow\n\n"
@@ -766,6 +770,24 @@ class NotebookBot:
             self.services.api.send_message(chat_id, "Sorry, I couldn't generate a summary right now. Please try again later.")
             return
         self.services.api.send_message(chat_id, f"<b>Summary — {scope_label}</b>\n\n{answer}")
+
+    def _handle_topics(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        _, source, tag = self._split_filters(args)
+        items = self.services.repository.chunks_with_embeddings(owner_id=bot_user_id, channel_url=source, tag=tag)
+        if not items:
+            self.services.api.send_message(
+                chat_id,
+                "No embedded content to cluster yet. Topics need embeddings — ingest with an embedding API key configured.",
+            )
+            return
+        topics = build_topics(items)
+        scope = tag or source or "your archive"
+        lines = [f"<b>Topics — {scope}</b> ({len(topics)} cluster(s) from {len(items)} chunks)"]
+        for topic in topics[:15]:
+            lines.append(f"\n• <b>{topic['label']}</b> ({topic['size']})")
+            if topic["sample"]:
+                lines.append(f"  {topic['sample']}")
+        self.services.api.send_message(chat_id, "\n".join(lines))
 
     def _handle_tags(self, chat_id: int, bot_user_id: int) -> None:
         tags = self.services.repository.list_tags(owner_id=bot_user_id)
