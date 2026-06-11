@@ -601,6 +601,30 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                     (owner_id,),
                 ).fetchall()]
 
+    def summary_items(self, *, owner_id: int, channel_url: str | None = None, tag: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        """One row per stored content item (with its text and source), for summarization.
+        Optionally scoped to a single source (``channel_url``) and/or ``tag``."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                sql = """
+                    SELECT mi.transcript_text AS text, ch.channel_title, ch.channel_url, m.message_url
+                    FROM media_items mi
+                    JOIN messages m ON mi.message_id = m.id
+                    JOIN channels ch ON m.channel_id = ch.id
+                    WHERE ch.owner_id = ? AND mi.transcript_text IS NOT NULL AND mi.transcript_text != ''
+                """
+                params: list[Any] = [owner_id]
+                if channel_url:
+                    sql += " AND ch.channel_url = ?"
+                    params.append(channel_url)
+                if tag:
+                    sql += " AND mi.id IN (SELECT media_item_id FROM content_tags WHERE owner_id = ? AND tag = ?)"
+                    params.extend([owner_id, tag])
+                sql += " ORDER BY m.id LIMIT ?"
+                params.append(limit)
+                return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
     # --- Import jobs (queue / progress / resume) ---------------------------
 
     def create_job(self, *, owner_id: int, channel_url: str, limit: int | None, created_at: str | None = None) -> int:

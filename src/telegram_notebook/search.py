@@ -55,6 +55,43 @@ class SearchService:
             region=region
         )
 
+    @staticmethod
+    def _build_summary_prompt(scope_label: str, items: list[dict[str, Any]], per_item_chars: int = 1500) -> str:
+        parts = []
+        for i, item in enumerate(items, 1):
+            source = item.get("channel_title") or item.get("channel_url") or "Unknown Source"
+            text = (item.get("text") or "").strip()[:per_item_chars]
+            parts.append(f"[{i}] ({source}) {text}")
+        context = "\n\n".join(parts)
+        return f"""شما یک دستیار هوشمند هستید که آرشیو تلگرام کاربر را خلاصه می‌کنید.
+بر اساس آیتم‌های زیر، یک خلاصه‌ی ساختارمند و مفید درباره‌ی «{scope_label}» بنویسید.
+خلاصه باید شامل موضوعات اصلی، نکات کلیدی و در صورت امکان دسته‌بندی مطالب باشد.
+فقط بر اساس همین آیتم‌ها بنویسید و چیزی از خودتان اضافه نکنید.
+
+آیتم‌ها:
+{context}
+
+خلاصه (به زبان فارسی، با تیترها و bullet در صورت نیاز):"""
+
+    def summarize(
+        self,
+        *,
+        scope_label: str,
+        items: list[dict[str, Any]],
+        api_key: str | None = None,
+        project_id: str | None = None,
+        region: str = "us-central1",
+    ) -> str:
+        if not items:
+            return "موردی برای خلاصه‌سازی پیدا نشد."
+        prompt = self._build_summary_prompt(scope_label, items)
+        return gemini_generate_content(
+            api_key=api_key,
+            prompt=prompt,
+            project_id=project_id,
+            region=region,
+        )
+
     def search(
         self,
         *,

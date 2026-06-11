@@ -62,6 +62,7 @@
 - **Forwarded Inbox**: فوروارد هر پیام به ربات، متن/کپشن آن را در inbox شخصی و قابل‌جستجوی کاربر ذخیره می‌کند
 - **Rule Engine + Tags**: تعریف قانون keyword→tag، تگ‌گذاری خودکار محتوای واردشده، و فیلتر `/search` و `/ask` با `--tag`
 - **Import Jobs**: import کامل کانال در background با صف، progress tracking، resume بعد از قطع‌شدن، و امکان لغو
+- **خلاصه‌سازی (NotebookLM)**: `/summarize` برای ساخت خلاصه‌ی ساختارمند از کل آرشیو، یک منبع خاص، یا یک تگ
 
 ---
 
@@ -155,6 +156,9 @@ Python Backend
 
 /ask <question> --tag <tag>
 پرسش فقط از محتوای یک تگ خاص
+
+/summarize [--source <url>] [--tag <tag>]
+خلاصه‌سازی کل آرشیو، یک منبع، یا یک تگ
 
 /sources
 نمایش منابع ایندکس‌شده
@@ -374,6 +378,7 @@ python -m telegram_notebook.bot
 - import کامل کانال با صف، progress و resume از طریق `/import` پشتیبانی می‌شود (یک worker در background)؛ هنوز یک sandbox تست برای کل مسیر Telethon وجود ندارد.
 - Forwarded Inbox فعلاً فقط متن/کپشن پیام‌های فورواردشده را ایندکس می‌کند؛ دانلود و transcription مدیا، OCR عکس و استخراج متن از PDF/DOCX هنوز اضافه نشده.
 - Rule Engine بر اساس تطبیق keyword (substring) است؛ قوانین AI-based و forward خودکار به کانال آرشیو هنوز اضافه نشده.
+- `/summarize` خلاصه‌ی per-source/per-tag/کل آرشیو می‌سازد؛ topic clustering و timeline خودکار هنوز اضافه نشده.
 - برای دیتاست بزرگ بهتر است به PostgreSQL + pgvector یا Qdrant مهاجرت شود.
 
 ---

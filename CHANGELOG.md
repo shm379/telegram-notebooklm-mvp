@@ -1,5 +1,20 @@
 # Changelog
 
+## Phase 7 — Summaries / NotebookLM (2026-06-09)
+
+خلاصه‌سازی آرشیو از Roadmap (summary per source و per tag).
+
+### Behaviour
+- `/summarize [--source <url>] [--tag <tag>]` — اگر فیلتری ندهید کل آرشیو، با `--source` یک منبع، و با `--tag` یک تگ خلاصه می‌شود (از همان پارسر `_split_filters`).
+- محتوا (یک ردیف به‌ازای هر آیتم، با متن و منبع) از `Repository.summary_items` گرفته می‌شود (scoped به owner + source/tag، با محدودیت پیش‌فرض ۲۰۰ آیتم).
+- خلاصه با `SearchService.summarize` ساخته می‌شود؛ prompt در `_build_summary_prompt` (تابع خالص) با ذکر منابع و کوتاه‌سازی متن هر آیتم تولید و به `gemini_generate_content` داده می‌شود.
+
+### Outside scope (follow-up)
+- topic clustering و timeline خودکار.
+
+### Tests
+- `tests/test_summarize.py`: ساخت prompt (شامل منابع و scope، کوتاه‌سازی متن)، پیام خالی، و scoping متد `summary_items` (کل/تگ/منبع و ایزولاسیون per-user).
+
 ## Phase 6 — Full Import Jobs (2026-06-09)
 
 import کامل کانال از Roadmap: صف، background worker، progress tracking، resume بعد از قطع‌شدن، و لغو.

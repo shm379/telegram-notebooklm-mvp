@@ -260,6 +260,8 @@ class NotebookBot:
             self._handle_rule(chat_id, bot_user_id, text.removeprefix("/rule").strip())
         elif command == "/tags":
             self._handle_tags(chat_id, bot_user_id)
+        elif command == "/summarize":
+            self._handle_summarize(chat_id, bot_user_id, text.removeprefix("/summarize").strip())
         elif command == "/join":
             self._handle_join(chat_id, bot_user_id, text.removeprefix("/join").strip())
         elif command == "/ingest":
@@ -319,6 +321,7 @@ class NotebookBot:
             "/canceljob &lt;id&gt; — cancel a queued/running import\n"
             "/search &lt;query&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — keyword/semantic search\n"
             "/ask &lt;question&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — ask the AI over your archive\n"
+            "/summarize [--source &lt;url&gt;] [--tag &lt;tag&gt;] — summarize a source, tag, or your whole archive\n"
             "/sources — list indexed sources\n"
             "/delete &lt;channel_url&gt; — delete a source's data\n"
             "/cancel — cancel the current flow\n\n"
@@ -734,6 +737,37 @@ class NotebookBot:
                 self.services.repository.tag_media(owner_id=bot_user_id, media_item_id=item["media_item_id"], tags=tags)
                 tagged += 1
         self.services.api.send_message(chat_id, f"Re-tagged {tagged} item(s) using {len(rules)} rule(s).")
+
+    def _handle_summarize(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        _, source, tag = self._split_filters(args)
+        items = self.services.repository.summary_items(owner_id=bot_user_id, channel_url=source, tag=tag)
+        if not items:
+            self.services.api.send_message(
+                chat_id,
+                "Nothing to summarize yet. Ingest a channel, forward messages, or check your /sources and /tags.",
+            )
+            return
+        scope_label = tag or source or "your whole archive"
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
+        vertex_config = self._vertex_search_config(user)
+        v_project = vertex_config["project_id"] if vertex_config else self.services.settings.vertex_project_id
+        v_region = vertex_config["region"] if vertex_config else self.services.settings.vertex_region
+
+        self.services.api.send_message(chat_id, f"Summarizing {scope_label} ({len(items)} item(s))...")
+        try:
+            answer = self._search_service_for_user(user).summarize(
+                scope_label=scope_label,
+                items=items,
+                api_key=gemini_api_key,
+                project_id=v_project,
+                region=v_region,
+            )
+        except Exception:
+            logger.exception("Summarize failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, "Sorry, I couldn't generate a summary right now. Please try again later.")
+            return
+        self.services.api.send_message(chat_id, f"<b>Summary — {scope_label}</b>\n\n{answer}")
 
     def _handle_tags(self, chat_id: int, bot_user_id: int) -> None:
         tags = self.services.repository.list_tags(owner_id=bot_user_id)
