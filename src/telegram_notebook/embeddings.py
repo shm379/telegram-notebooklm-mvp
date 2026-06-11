@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Sequence
+from collections.abc import Sequence
 
 from .provider_http import gemini_embed_text
 
@@ -57,7 +57,7 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
 
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(y * y for y in b))
     if norm_a == 0 or norm_b == 0:

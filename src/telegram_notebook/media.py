@@ -5,7 +5,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav", ".ogg", ".oga", ".opus", ".aac", ".flac"}
 MAX_TRANSCRIBE_BYTES = 24 * 1024 * 1024

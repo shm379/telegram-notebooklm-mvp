@@ -7,7 +7,6 @@ from telegram_notebook.embeddings import EmbeddingService
 from telegram_notebook.pipeline import IngestionPipeline
 from telegram_notebook.rules import match_tags
 
-
 # --- pure matcher ---
 
 def test_match_tags_is_case_insensitive_substring():

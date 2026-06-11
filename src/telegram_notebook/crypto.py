@@ -91,7 +91,7 @@ def encrypt(value: str | None) -> str | None:
     mac_key = _hkdf(master, b"telegram-notebook:mac")
     nonce = os.urandom(_NONCE_LEN)
     plaintext = value.encode("utf-8")
-    ciphertext = bytes(a ^ b for a, b in zip(plaintext, _keystream(enc_key, nonce, len(plaintext))))
+    ciphertext = bytes(a ^ b for a, b in zip(plaintext, _keystream(enc_key, nonce, len(plaintext)), strict=True))
     mac = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
     token = base64.urlsafe_b64encode(nonce + ciphertext + mac).decode("ascii")
     return _PREFIX + token
@@ -125,5 +125,5 @@ def decrypt(value: str | None) -> str | None:
         return None
 
     enc_key = _hkdf(master, b"telegram-notebook:enc")
-    plaintext = bytes(a ^ b for a, b in zip(ciphertext, _keystream(enc_key, nonce, len(ciphertext))))
+    plaintext = bytes(a ^ b for a, b in zip(ciphertext, _keystream(enc_key, nonce, len(ciphertext)), strict=True))
     return plaintext.decode("utf-8")

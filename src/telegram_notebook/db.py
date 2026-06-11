@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import sqlite3
 import json
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
 
-from .crypto import decrypt as _decrypt, encrypt as _encrypt
-
+from .crypto import decrypt as _decrypt
+from .crypto import encrypt as _encrypt
 
 # Columns holding secrets that are encrypted at rest (see crypto.py).
 _BOT_USER_SECRETS = ("api_hash", "session_string", "gemini_api_key")
@@ -271,7 +271,8 @@ class Repository:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 res = conn.execute("SELECT id FROM media_items WHERE message_id = ?", (message_id,)).fetchone()
-                if res: return res[0]
+                if res:
+                    return res[0]
                 
                 cursor = conn.execute("""
                     INSERT INTO media_items (message_id, file_name, file_path, mime_type, media_kind, duration_seconds, file_size_bytes)
@@ -380,7 +381,8 @@ class Repository:
                     "SELECT id FROM channels WHERE owner_id = ? AND channel_url = ?",
                     (owner_id, channel_url),
                 ).fetchone()
-                if not res: return False
+                if not res:
+                    return False
                 cid = res[0]
                 conn.execute("DELETE FROM chunks WHERE media_item_id IN (SELECT id FROM media_items WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?))", (cid,))
                 conn.execute("DELETE FROM media_items WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?)", (cid,))

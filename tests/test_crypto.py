@@ -1,6 +1,5 @@
 from telegram_notebook import crypto
 
-
 KEY = "test-master-key-please-change"
 
 

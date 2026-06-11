@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 from .db import Repository
 
@@ -28,7 +28,7 @@ Runner = Callable[[dict, Callable[[int, "int | None", "int | None"], None], Call
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class JobWorker(threading.Thread):
