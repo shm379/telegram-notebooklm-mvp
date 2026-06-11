@@ -1,5 +1,22 @@
 # Changelog
 
+## Auto-forward to an archive channel (2026-06-11)
+
+forward خودکار آیتم‌های tag‌خورده به یک کانال آرشیو (از follow-up های Rule Engine).
+
+### Behaviour
+- دستور `/setarchive <@channel | chat id>` کانال آرشیو کاربر را تنظیم می‌کند؛ `/setarchive off` آن را غیرفعال و `/setarchive` بدون آرگومان وضعیت فعلی را نشان می‌دهد.
+- در مسیر Forwarded Inbox، بعد از ذخیره‌ی موفق، متن فوروارد با قوانین کاربر (`match_tags`) سنجیده می‌شود؛ اگر حداقل یک tag مطابقت کند و کانال آرشیو تنظیم شده باشد، آیتم با ذکر منبع، tagها، متن و لینک به کانال آرشیو فوروارد می‌شود. خطای ارسال بی‌صدا لاگ می‌شود و جریان اصلی را نمی‌شکند.
+
+### Data
+- ستون جدید `archive_chat_id` روی `bot_users` با مهاجرت idempotent `_ensure_bot_user_columns` (ALTER TABLE در صورت نبود ستون). متد `Repository.set_archive_chat`.
+
+### Outside scope (follow-up)
+- قوانین AI-based و auto-forward برای import کانال‌ها (فعلاً فقط Forwarded Inbox).
+
+### Tests
+- `tests/test_autoforward.py`: تصمیم/قالب‌بندی `_auto_forward` (ارسال هنگام وجود archive+tag، رد در نبود هرکدام، بلعیدن خطای ارسال)، چرخه‌ی `/setarchive` (set/show/clear)، و مهاجرت ستون + scoping per-user.
+
 ## Topic clustering (2026-06-11)
 
 خوشه‌بندی موضوعی محتوای آرشیو (از follow-up های NotebookLM).

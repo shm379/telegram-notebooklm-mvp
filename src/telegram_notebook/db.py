@@ -202,7 +202,15 @@ class Repository:
                     )
                 """)
                 self._ensure_channel_owner(conn)
+                self._ensure_bot_user_columns(conn)
                 conn.commit()
+
+    @staticmethod
+    def _ensure_bot_user_columns(conn: sqlite3.Connection) -> None:
+        """Add columns introduced after the initial bot_users schema (idempotent)."""
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(bot_users)").fetchall()]
+        if "archive_chat_id" not in cols:
+            conn.execute("ALTER TABLE bot_users ADD COLUMN archive_chat_id TEXT")
 
     @staticmethod
     def _ensure_channel_owner(conn: sqlite3.Connection) -> None:
@@ -426,6 +434,15 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 conn.row_factory = sqlite3.Row
                 res = conn.execute("SELECT * FROM bot_users WHERE bot_user_id = ?", (bot_user_id,)).fetchone()
                 return _decrypt_row(dict(res), _BOT_USER_SECRETS) if res else None
+
+    def set_archive_chat(self, *, bot_user_id: int, archive_chat_id: str | None) -> None:
+        """Set (or clear, when ``None``) the channel/chat that tagged forwards are auto-forwarded to."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "UPDATE bot_users SET archive_chat_id = ? WHERE bot_user_id = ?",
+                    (archive_chat_id, bot_user_id),
+                )
 
     def disconnect_bot_user(self, *, bot_user_id: int) -> bool:
         """Remove a user's session and credentials. Returns True if a session existed."""
