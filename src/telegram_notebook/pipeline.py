@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urlparse
@@ -9,7 +10,7 @@ from .chunking import split_text
 from .config import Settings
 from .db import Repository
 from .embeddings import EmbeddingService
-from .rules import match_tags
+from .rules import classify_ai_tags, match_tags
 from .transcription import TranscriptionService
 
 logger = logging.getLogger(__name__)
@@ -36,11 +37,16 @@ class IngestionPipeline:
         repository: Repository,
         transcription: TranscriptionService | None,
         embeddings: EmbeddingService,
+        ai_classifier: Callable[[str], str] | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
         self.transcription = transcription
         self.embeddings = embeddings
+        # When provided, AI-kind rules are evaluated with this LLM callable during
+        # auto-tagging. Only the forwarded-inbox path wires it in (and only when the
+        # user opted in), so bulk channel imports never trigger per-item LLM calls.
+        self.ai_classifier = ai_classifier
 
     async def ingest_channel(
         self,
@@ -177,11 +183,22 @@ class IngestionPipeline:
         return True
 
     def _apply_rules(self, owner_id: int, media_item_id: int, text: str) -> None:
-        """Auto-tag a stored item by matching the owner's keyword rules against its text."""
+        """Auto-tag a stored item by matching the owner's rules against its text.
+
+        Keyword rules always run; AI-kind rules only run when an ``ai_classifier``
+        was supplied (the opt-in forwarded-inbox path).
+        """
         rules = self.repository.list_rules(owner_id=owner_id)
         if not rules:
             return
         tags = match_tags(text, rules)
+        if self.ai_classifier is not None:
+            ai_rules = [r for r in rules if r.get("kind") == "ai"]
+            if ai_rules:
+                try:
+                    tags |= classify_ai_tags(text, ai_rules, generate=self.ai_classifier)
+                except Exception:
+                    logger.exception("AI auto-tagging failed for owner %s", owner_id)
         if tags:
             self.repository.tag_media(owner_id=owner_id, media_item_id=media_item_id, tags=tags)
 

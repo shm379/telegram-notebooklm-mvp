@@ -208,6 +208,9 @@ Python Backend
 /rule apply
 اعمال دوباره قوانین روی محتوای موجود (backfill)
 
+/airules on|off
+اجرای خودکار قوانین AI روی هر فوروارد جدید (opt-in؛ پیش‌فرض خاموش)
+
 /tags
 نمایش تگ‌ها و تعداد آیتم هر تگ
 
@@ -326,7 +329,9 @@ Telegram AI Archive
 
 **Auto-forward:** با `/setarchive <@channel>` یک کانال آرشیو تنظیم می‌شود؛ از آن پس هر پیامی که به ربات فوروارد می‌کنید و متن آن با یک قانون tag مطابقت دارد، علاوه‌بر ذخیره در inbox، با ذکر منبع/تگ‌ها/لینک به آن کانال هم فوروارد می‌شود (ربات باید ادمین کانال باشد). برای غیرفعال‌کردن: `/setarchive off`.
 
-**هنوز اضافه نشده (follow-up):** اعمال خودکار قوانین AI روی هر ingest (فعلاً فقط `/rule apply`) و auto-forward برای import کانال‌ها (فعلاً فقط مسیر Forwarded Inbox).
+قوانین AI علاوه‌بر `/rule apply`، با `/airules on` به‌صورت خودکار روی هر فوروارد جدید هم اجرا می‌شوند (opt-in، یک فراخوانی LLM به‌ازای هر آیتم؛ import انبوه کانال هیچ‌وقت auto-classify نمی‌شود).
+
+**هنوز اضافه نشده (follow-up):** auto-forward برای import کانال‌ها (فعلاً فقط مسیر Forwarded Inbox) و استخراج DOCX/Excel.
 
 ---
 
