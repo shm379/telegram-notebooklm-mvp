@@ -78,6 +78,14 @@ class TelegramBotApi:
         with open(photo_path, "rb") as f:
             self.call("sendPhoto", payload=payload, files={"photo": f})
 
+    def send_document(self, *, chat_id: int, document_path: Path, caption: str | None = None) -> None:
+        payload: dict[str, object] = {"chat_id": chat_id}
+        if caption:
+            payload["caption"] = caption
+            payload["parse_mode"] = "HTML"
+        with open(document_path, "rb") as f:
+            self.call("sendDocument", payload=payload, files={"document": f})
+
     def get_file(self, file_id: str) -> dict[str, object]:
         """Resolve a file_id to its metadata (including ``file_path``) via getFile."""
         return dict(self.call("getFile", {"file_id": file_id}).get("result", {}))
