@@ -671,6 +671,39 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 params.append(limit)
                 return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
+    def archive_stats(self, *, owner_id: int) -> dict[str, Any]:
+        """Aggregate counts for the owner's archive: items, sources, tags, kinds, date range."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                base = (
+                    "FROM media_items mi JOIN messages m ON mi.message_id = m.id "
+                    "JOIN channels ch ON m.channel_id = ch.id "
+                    "WHERE ch.owner_id = ? AND mi.transcript_text IS NOT NULL AND mi.transcript_text != ''"
+                )
+                total, first_date, last_date = conn.execute(
+                    f"SELECT COUNT(*), MIN(m.message_date), MAX(m.message_date) {base}", (owner_id,)
+                ).fetchone()
+                by_kind = {
+                    kind: count
+                    for kind, count in conn.execute(
+                        f"SELECT mi.media_kind, COUNT(*) {base} GROUP BY mi.media_kind ORDER BY COUNT(*) DESC", (owner_id,)
+                    ).fetchall()
+                }
+                sources = conn.execute(
+                    "SELECT COUNT(*) FROM channels WHERE owner_id = ?", (owner_id,)
+                ).fetchone()[0]
+                tags = conn.execute(
+                    "SELECT COUNT(DISTINCT tag) FROM content_tags WHERE owner_id = ?", (owner_id,)
+                ).fetchone()[0]
+                return {
+                    "items": total or 0,
+                    "sources": sources or 0,
+                    "tags": tags or 0,
+                    "by_kind": by_kind,
+                    "first_date": first_date,
+                    "last_date": last_date,
+                }
+
     def timeline_items(self, *, owner_id: int, channel_url: str | None = None, tag: str | None = None, limit: int = 2000) -> list[dict[str, Any]]:
         """Dated content items (date + text + source), newest first, for the timeline view.
         Optionally scoped to a single source (``channel_url``) and/or ``tag``."""

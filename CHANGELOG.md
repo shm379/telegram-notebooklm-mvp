@@ -1,5 +1,19 @@
 # Changelog
 
+## Archive stats (2026-06-12)
+
+نمای کلی آرشیو با `/stats` و ابزار MCP `archive_stats`.
+
+### Behaviour
+- `/stats` تعداد آیتم‌ها، منابع، تگ‌ها، شمارش بر اساس نوع مدیا، و بازه‌ی زمانی (اولین/آخرین تاریخ) را نشان می‌دهد. ابزار MCP `archive_stats` همان خروجی را می‌دهد.
+
+### Components
+- `Repository.archive_stats(owner_id)` با aggregate queries (scoped به owner).
+- ماژول خالص `stats.py` با `format_stats(stats)`.
+
+### Tests
+- `tests/test_stats.py`: قالب‌بندی (خالی/پر)، aggregate و scoping per-user در `archive_stats`، و ابزار MCP.
+
 ## Markdown export (2026-06-12)
 
 خروجی‌گرفتن آرشیو به یک فایل Markdown قابل‌دانلود.
