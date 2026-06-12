@@ -17,7 +17,8 @@ from .embeddings import EmbeddingService
 from .jobs import JobWorker
 from .logging_config import setup_logging
 from .pipeline import IngestionPipeline
-from .rules import match_tags
+from .provider_http import gemini_generate_content
+from .rules import classify_ai_tags, match_tags
 from .search import SearchService
 from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
 from .timeline import build_timeline
@@ -336,6 +337,7 @@ class NotebookBot:
             "/cancel — cancel the current flow\n\n"
             "<b>Rules &amp; tags</b>\n"
             "/rule add &lt;keyword&gt; -&gt; &lt;tag&gt; — auto-tag matching content\n"
+            "/rule add-ai &lt;criterion&gt; -&gt; &lt;tag&gt; — AI-judged tag (applied on /rule apply)\n"
             "/rule list — show your rules\n"
             "/rule remove &lt;id&gt; — delete a rule\n"
             "/rule apply — re-tag existing content with current rules\n"
@@ -733,23 +735,28 @@ class NotebookBot:
         sub = parts[0].lower() if parts else ""
         rest = parts[1].strip() if len(parts) > 1 else ""
 
-        if sub == "add":
+        if sub in ("add", "add-ai"):
             parsed = self._parse_rule_add(rest)
             if not parsed:
-                self.services.api.send_message(chat_id, "Usage: /rule add <keyword> -> <tag>")
+                fmt = "criterion" if sub == "add-ai" else "keyword"
+                self.services.api.send_message(chat_id, f"Usage: /rule {sub} <{fmt}> -> <tag>")
                 return
             keyword, tag = parsed
+            kind = "ai" if sub == "add-ai" else "keyword"
             self.services.repository.add_rule(
-                owner_id=bot_user_id, keyword=keyword, tag=tag,
+                owner_id=bot_user_id, keyword=keyword, tag=tag, kind=kind,
                 created_at=datetime.now(UTC).isoformat(),
             )
-            self.services.api.send_message(chat_id, f"Rule added: “{keyword}” → {tag}\nRun /rule apply to tag existing items.")
+            noun = "AI rule" if kind == "ai" else "Rule"
+            self.services.api.send_message(chat_id, f"{noun} added: “{keyword}” → {tag}\nRun /rule apply to tag existing items.")
         elif sub in ("", "list"):
             rules = self.services.repository.list_rules(owner_id=bot_user_id)
             if not rules:
                 self.services.api.send_message(chat_id, "No rules yet. Add one with: /rule add <keyword> -> <tag>")
                 return
-            lines = ["<b>Your rules</b>"] + [f"#{r['id']}: “{r['keyword']}” → {r['tag']}" for r in rules]
+            lines = ["<b>Your rules</b>"] + [
+                f"#{r['id']}: {'🤖' if r.get('kind') == 'ai' else '📝'} “{r['keyword']}” → {r['tag']}" for r in rules
+            ]
             self.services.api.send_message(chat_id, "\n".join(lines))
         elif sub == "remove":
             try:
@@ -767,16 +774,44 @@ class NotebookBot:
             self.services.api.send_message(chat_id, "Usage: /rule add|list|remove|apply")
 
     def _retag_all(self, chat_id: int, bot_user_id: int) -> None:
-        """Recompute tags for all of the user's stored content from the current rules."""
+        """Recompute tags for all of the user's stored content from the current rules.
+
+        Keyword rules run locally; AI rules (if any) are evaluated with one LLM call
+        per item, and are skipped with a note when no Gemini API key is available.
+        """
         rules = self.services.repository.list_rules(owner_id=bot_user_id)
+        ai_rules = [r for r in rules if r.get("kind") == "ai"]
+
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
+        ai_active = bool(ai_rules) and bool(api_key)
+        generate = None
+        if ai_active:
+            def generate(prompt: str) -> str:
+                return gemini_generate_content(
+                    api_key=api_key,
+                    prompt=prompt,
+                    project_id=self.services.settings.vertex_project_id,
+                    region=self.services.settings.vertex_region or "us-central1",
+                )
+
         self.services.repository.clear_tags(owner_id=bot_user_id)
         tagged = 0
         for item in self.services.repository.media_texts(owner_id=bot_user_id):
             tags = match_tags(item.get("text"), rules)
+            if ai_active:
+                try:
+                    tags |= classify_ai_tags(item.get("text") or "", ai_rules, generate=generate)
+                except Exception:
+                    logger.exception("AI rule classification failed for user %s", bot_user_id)
             if tags:
                 self.services.repository.tag_media(owner_id=bot_user_id, media_item_id=item["media_item_id"], tags=tags)
                 tagged += 1
-        self.services.api.send_message(chat_id, f"Re-tagged {tagged} item(s) using {len(rules)} rule(s).")
+
+        msg = f"Re-tagged {tagged} item(s) using {len(rules)} rule(s)."
+        if ai_rules and not api_key:
+            msg += f"\nNote: {len(ai_rules)} AI rule(s) were skipped — connect a Gemini API key (via /connect) to enable them."
+        self.services.api.send_message(chat_id, msg)
 
     def _handle_summarize(self, chat_id: int, bot_user_id: int, args: str) -> None:
         _, source, tag = self._split_filters(args)
