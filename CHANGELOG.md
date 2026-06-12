@@ -1,5 +1,10 @@
 # Changelog
 
+## Dashboard Library panel (2026-06-12)
+
+- داشبورد وب یک کارت «Library» گرفت که با دکمه، `/api/stats` و `/api/recent` را فراخوانی و خلاصه‌ی آرشیو (تعداد آیتم/منبع/تگ و نوع مدیا) و آخرین آیتم‌ها را نمایش می‌دهد.
+- تست smoke در `tests/test_web_api.py` که وجود پنل و ارجاع به endpointها را در `INDEX_HTML` بررسی می‌کند.
+
 ## Web API: stats / recent / timeline (2026-06-12)
 
 پاریتی داشبورد وب با قابلیت‌های جدید (لایه‌ی JSON API).

@@ -312,6 +312,15 @@ INDEX_HTML = """
           </div>
           <div class="status" id="searchStatus"></div>
         </div>
+
+        <div class="card">
+          <h2>Library</h2>
+          <p class="tiny">An overview of your archive and its most recent items.</p>
+          <button id="loadLibraryBtn" type="button">Load library</button>
+          <div class="status" id="libraryStatus"></div>
+          <div class="tiny" id="libraryStats" style="margin-top:10px;"></div>
+          <div class="results" id="libraryRecent"></div>
+        </div>
       </section>
 
       <div id="brainAnswer" style="display:none; margin-top:20px;" class="card">
@@ -519,6 +528,42 @@ INDEX_HTML = """
           displayResults(data.sources);
         } catch (error) {
           searchStatus.textContent = error.message;
+        }
+      });
+
+      const loadLibraryBtn = document.getElementById("loadLibraryBtn");
+      const libraryStatus = document.getElementById("libraryStatus");
+      const libraryStats = document.getElementById("libraryStats");
+      const libraryRecent = document.getElementById("libraryRecent");
+
+      loadLibraryBtn.addEventListener("click", async () => {
+        libraryStatus.textContent = "در حال بارگذاری...";
+        libraryStats.textContent = "";
+        libraryRecent.innerHTML = "";
+        try {
+          const [stats, recent] = await Promise.all([
+            fetchJson("/api/stats"),
+            fetchJson("/api/recent?limit=10"),
+          ]);
+          const kinds = Object.entries(stats.by_kind || {}).map(([k, v]) => `${k}: ${v}`).join(", ");
+          libraryStats.textContent =
+            `Items: ${stats.items} · Sources: ${stats.sources} · Tags: ${stats.tags}` +
+            (kinds ? ` · ${kinds}` : "");
+          for (const item of (recent.items || [])) {
+            const el = document.createElement("div");
+            el.className = "result";
+            const meta = document.createElement("div");
+            meta.className = "meta";
+            meta.textContent = `${item.source}${item.date ? " · " + item.date : ""}`;
+            const body = document.createElement("div");
+            body.textContent = item.snippet || "";
+            el.appendChild(meta);
+            el.appendChild(body);
+            libraryRecent.appendChild(el);
+          }
+          libraryStatus.textContent = "";
+        } catch (error) {
+          libraryStatus.textContent = error.message;
         }
       });
 
