@@ -71,3 +71,10 @@ def test_api_stats_requires_auth_off_loopback(monkeypatch, tmp_path):
     h = FakeHandler("/api/stats", client="8.8.8.8", headers={})
     h.do_GET()
     assert h.sent[0] == 401
+
+
+def test_index_html_has_library_panel():
+    # The dashboard surfaces the new endpoints in a Library panel.
+    assert 'id="loadLibraryBtn"' in web.INDEX_HTML
+    assert "/api/stats" in web.INDEX_HTML
+    assert "/api/recent" in web.INDEX_HTML
