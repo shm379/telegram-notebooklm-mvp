@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import re
 import shutil
 import tempfile
 import time
@@ -16,6 +17,7 @@ from .clustering import build_topics, label_cluster
 from .config import Settings, get_settings
 from .db import Repository, connect
 from .embeddings import EmbeddingService
+from .export import build_markdown_export
 from .extraction import ExtractionService
 from .jobs import JobWorker
 from .logging_config import setup_logging
@@ -296,6 +298,8 @@ class NotebookBot:
             self._handle_sources(chat_id, bot_user_id)
         elif command == "/delete":
             self._handle_delete(chat_id, bot_user_id, text.removeprefix("/delete").strip())
+        elif command == "/export":
+            self._handle_export(chat_id, bot_user_id, text.removeprefix("/export").strip())
         else:
             self.services.api.send_message(chat_id=chat_id, text="Unknown command. Send /help to see what I can do.")
 
@@ -344,6 +348,7 @@ class NotebookBot:
             "/summarize [--source &lt;url&gt;] [--tag &lt;tag&gt;] — summarize a source, tag, or your whole archive\n"
             "/topics [--source &lt;url&gt;] [--tag &lt;tag&gt;] — cluster your content into topics\n"
             "/timeline [--source &lt;url&gt;] [--tag &lt;tag&gt;] [--day] — browse your archive by date\n"
+            "/export [--source &lt;url&gt;] [--tag &lt;tag&gt;] — download a Markdown export\n"
             "/sources — list indexed sources\n"
             "/delete &lt;channel_url&gt; — delete a source's data\n"
             "/cancel — cancel the current flow\n\n"
@@ -1016,6 +1021,29 @@ class NotebookBot:
             suffix = f" — {sources}" if sources else ""
             lines.append(f"• <b>{p['period']}</b>: {p['count']} item(s){suffix}")
         self.services.api.send_message(chat_id, "\n".join(lines))
+
+    def _handle_export(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        _, source, tag = self._split_filters(args)
+        items = self.services.repository.summary_items(owner_id=bot_user_id, channel_url=source, tag=tag, limit=2000)
+        if not items:
+            self.services.api.send_message(chat_id, "Nothing to export yet. Ingest a channel or forward messages first.")
+            return
+        scope = tag or source or "your whole archive"
+        markdown = build_markdown_export(scope, items)
+        slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (tag or source or "archive")).strip("-").lower() or "archive"
+        tmpdir = Path(tempfile.mkdtemp(prefix="export_"))
+        path = tmpdir / f"telegram-{slug}.md"
+        path.write_text(markdown, encoding="utf-8")
+        try:
+            self.services.api.send_document(
+                chat_id=chat_id, document_path=path,
+                caption=f"Export — {html.escape(scope)} ({len(items)} item(s))",
+            )
+        except Exception:
+            logger.exception("Export send failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, "Sorry, I couldn't send the export right now. Please try again later.")
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _handle_tags(self, chat_id: int, bot_user_id: int) -> None:
         tags = self.services.repository.list_tags(owner_id=bot_user_id)

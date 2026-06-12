@@ -1,5 +1,20 @@
 # Changelog
 
+## Markdown export (2026-06-12)
+
+خروجی‌گرفتن آرشیو به یک فایل Markdown قابل‌دانلود.
+
+### Behaviour
+- `/export [--source <url>] [--tag <tag>]` کل آرشیو، یک منبع یا یک تگ را به یک سند Markdown (با عنوان، منبع، لینک و متن هر آیتم) تبدیل و به‌صورت فایل به کاربر می‌فرستد.
+
+### Components
+- ماژول خالص `export.py` با `build_markdown_export(scope_label, items)`.
+- `TelegramBotApi.send_document` برای آپلود فایل.
+- handler `_handle_export` که سند را در یک فایل موقت می‌نویسد، می‌فرستد و پاک‌سازی می‌کند.
+
+### Tests
+- `tests/test_export.py`: ساختار Markdown و فیلدهای ناقص، و orchestration هندلر (ارسال سند با محتوای درست، و پیام آرشیو خالی).
+
 ## LLM topic labels (2026-06-12)
 
 نام‌گذاری خوشه‌های `/topics` با LLM (در صورت وجود کلید Gemini).

@@ -67,6 +67,7 @@
 - **خلاصه‌سازی (NotebookLM)**: `/summarize` برای ساخت خلاصه‌ی ساختارمند از کل آرشیو، یک منبع خاص، یا یک تگ
 - **Topic clustering**: `/topics` محتوای آرشیو را به‌صورت آفلاین (روی embeddingهای موجود) خوشه‌بندی موضوعی می‌کند؛ در صورت وجود کلید Gemini، برچسب هر خوشه با LLM ساخته می‌شود (وگرنه از پرتکرارترین واژه‌ها)
 - **Timeline**: `/timeline` آرشیو را بر اساس تاریخ (ماه یا روز) گروه‌بندی می‌کند — مکمل زمانیِ `/topics`
+- **Export**: `/export` کل آرشیو، یک منبع یا یک تگ را به‌صورت یک فایل Markdown قابل‌دانلود خروجی می‌گیرد
 - **MCP Server (read-only)**: expose کردن آرشیو به ابزارهای AI با JSON-RPC روی stdio (`python -m telegram_notebook.mcp_server`)
 
 ---
@@ -170,6 +171,9 @@ Python Backend
 
 /timeline [--source <url>] [--tag <tag>] [--day]
 نمای زمانی آرشیو بر اساس ماه (یا روز با --day)
+
+/export [--source <url>] [--tag <tag>]
+دانلود خروجی Markdown از کل آرشیو، یک منبع، یا یک تگ
 
 /sources
 نمایش منابع ایندکس‌شده
