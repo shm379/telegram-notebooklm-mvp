@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from typing import Any
 
 from .embeddings import cosine_similarity
@@ -84,17 +85,45 @@ def cluster_embeddings(
     return members
 
 
+def build_label_prompt(texts: list[str], *, max_items: int = 6, max_chars: int = 300) -> str:
+    """Prompt asking the model for a short topic label over a cluster's snippets."""
+    samples = "\n".join(f"- {t.strip()[:max_chars]}" for t in texts[:max_items] if t.strip())
+    return (
+        "Below are related snippets from a personal archive. Give a single short topic "
+        "label (2 to 5 words, no quotes or trailing punctuation) in the snippets' main "
+        "language. Reply with ONLY the label.\n\n"
+        f"Snippets:\n{samples}\n\nLabel:"
+    )
+
+
+def parse_topic_label(response: str | None) -> str:
+    """Clean an LLM label reply: first non-empty line, no surrounding quotes, capped."""
+    for line in (response or "").splitlines():
+        cleaned = line.strip().strip("\"'").strip()
+        if cleaned:
+            return cleaned[:60]
+    return ""
+
+
+def label_cluster(texts: list[str], *, generate: Callable[[str], str]) -> str:
+    """Produce an LLM topic label for a cluster using the injected ``generate`` callable."""
+    return parse_topic_label(generate(build_label_prompt(texts)))
+
+
 def build_topics(
     items: list[dict[str, Any]],
     *,
     threshold: float = 0.6,
     max_clusters: int = 20,
     min_size: int = 1,
+    namer: Callable[[list[str]], str] | None = None,
 ) -> list[dict[str, Any]]:
     """Cluster ``items`` and return topic summaries sorted by size (desc).
 
     Each topic: ``{label, size, sample, sources}``. ``items`` carry ``embedding``,
-    ``text`` and optionally ``channel_title``/``channel_url``.
+    ``text`` and optionally ``channel_title``/``channel_url``. When ``namer`` is given
+    it labels each cluster from its texts (e.g. via an LLM); on empty result or error
+    it falls back to the keyword-frequency label.
     """
     clusters = cluster_embeddings(items, threshold=threshold, max_clusters=max_clusters)
     topics: list[dict[str, Any]] = []
@@ -102,8 +131,15 @@ def build_topics(
         if len(member_indices) < min_size:
             continue
         texts = [items[i].get("text") or "" for i in member_indices]
-        terms = top_terms(texts)
-        label = "، ".join(terms) if terms else "Untitled topic"
+        label = ""
+        if namer is not None:
+            try:
+                label = (namer(texts) or "").strip()
+            except Exception:
+                label = ""
+        if not label:
+            terms = top_terms(texts)
+            label = "، ".join(terms) if terms else "Untitled topic"
         sources = sorted({
             (items[i].get("channel_title") or items[i].get("channel_url"))
             for i in member_indices

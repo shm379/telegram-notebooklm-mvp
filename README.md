@@ -65,7 +65,7 @@
 - **Auto-forward به کانال آرشیو**: با `/setarchive`، هر پیامی که فوروارد می‌کنید و با یک قانون tag مطابقت دارد، به‌صورت خودکار به کانال آرشیو شما هم فوروارد می‌شود
 - **Import Jobs**: import کامل کانال در background با صف، progress tracking، resume بعد از قطع‌شدن، و امکان لغو
 - **خلاصه‌سازی (NotebookLM)**: `/summarize` برای ساخت خلاصه‌ی ساختارمند از کل آرشیو، یک منبع خاص، یا یک تگ
-- **Topic clustering**: `/topics` محتوای آرشیو را به‌صورت آفلاین (روی embeddingهای موجود) خوشه‌بندی موضوعی می‌کند
+- **Topic clustering**: `/topics` محتوای آرشیو را به‌صورت آفلاین (روی embeddingهای موجود) خوشه‌بندی موضوعی می‌کند؛ در صورت وجود کلید Gemini، برچسب هر خوشه با LLM ساخته می‌شود (وگرنه از پرتکرارترین واژه‌ها)
 - **Timeline**: `/timeline` آرشیو را بر اساس تاریخ (ماه یا روز) گروه‌بندی می‌کند — مکمل زمانیِ `/topics`
 - **MCP Server (read-only)**: expose کردن آرشیو به ابزارهای AI با JSON-RPC روی stdio (`python -m telegram_notebook.mcp_server`)
 
@@ -415,7 +415,7 @@ python -m telegram_notebook.bot
 - import کامل کانال با صف، progress و resume از طریق `/import` پشتیبانی می‌شود (یک worker در background)؛ هنوز یک sandbox تست برای کل مسیر Telethon وجود ندارد.
 - Forwarded Inbox علاوه‌بر متن/کپشن، مدیای فورواردشده را پردازش می‌کند: صوت/ویدیو/voice با transcription و عکس/PDF با OCR (Gemini multimodal) به متن تبدیل می‌شوند. استخراج DOCX/Excel و دانلود مدیای داخل import کامل کانال هنوز اضافه نشده.
 - Rule Engine بر اساس تطبیق keyword (substring) است؛ قوانین AI-based و forward خودکار به کانال آرشیو هنوز اضافه نشده.
-- `/topics` خوشه‌بندی موضوعی را روی embeddingهای موجود انجام می‌دهد (greedy cosine، آفلاین)؛ نیازمند آن است که محتوا با کلید embedding ایندکس شده باشد. `/timeline` نمای زمانی (ماه/روز) را روی تاریخ پیام‌ها می‌سازد. نام‌گذاری خوشه‌ها با LLM هنوز اضافه نشده.
+- `/topics` خوشه‌بندی موضوعی را روی embeddingهای موجود انجام می‌دهد (greedy cosine، آفلاین)؛ نیازمند آن است که محتوا با کلید embedding ایندکس شده باشد. برچسب خوشه‌ها در صورت وجود کلید Gemini با LLM ساخته می‌شود و در غیر این صورت به پرتکرارترین واژه‌ها برمی‌گردد. `/timeline` نمای زمانی (ماه/روز) را روی تاریخ پیام‌ها می‌سازد.
 - برای دیتاست بزرگ بهتر است به PostgreSQL + pgvector یا Qdrant مهاجرت شود.
 
 ---
