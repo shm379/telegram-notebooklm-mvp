@@ -261,6 +261,16 @@ curl -X POST http://127.0.0.1:8000/api/ask \
   }'
 ```
 
+### Stats / Recent / Timeline (read-only)
+
+```bash
+curl http://127.0.0.1:8000/api/stats
+curl 'http://127.0.0.1:8000/api/recent?limit=10'
+curl 'http://127.0.0.1:8000/api/timeline?granularity=month'
+```
+
+این endpointها مثل بقیه‌ی API با `WEB_API_TOKEN` (یا فقط loopback در نبود توکن) محافظت می‌شوند.
+
 ---
 
 ## مسیر محصول نهایی

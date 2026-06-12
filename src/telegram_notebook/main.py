@@ -16,7 +16,9 @@ from .embeddings import EmbeddingService
 from .logging_config import setup_logging
 from .model_catalog import ModelCatalogService
 from .pipeline import IngestionPipeline
+from .recent import recent_rows
 from .search import SearchService
+from .timeline import build_timeline
 from .transcription import TranscriptionService
 
 logger = logging.getLogger(__name__)
@@ -529,6 +531,15 @@ INDEX_HTML = """
 """
 
 
+def _query_int(query: dict, name: str, *, default: int, lo: int, hi: int) -> int:
+    """Read a clamped integer query param, falling back to ``default`` on bad input."""
+    try:
+        value = int(query.get(name, [str(default)])[0])
+    except (ValueError, TypeError):
+        value = default
+    return max(lo, min(hi, value))
+
+
 class RequestHandler(BaseHTTPRequestHandler):
     server_version = "TelegramNotebook/0.2"
 
@@ -620,6 +631,26 @@ class RequestHandler(BaseHTTPRequestHandler):
                         "models": models,
                     }
                 )
+                return
+            if parsed.path == "/api/stats":
+                if not self._require_auth():
+                    return
+                self._send_json(state.repository.archive_stats(owner_id=WEB_OWNER_ID))
+                return
+            if parsed.path == "/api/recent":
+                if not self._require_auth():
+                    return
+                limit = _query_int(parse_qs(parsed.query), "limit", default=10, lo=1, hi=50)
+                items = state.repository.timeline_items(owner_id=WEB_OWNER_ID, limit=limit)
+                self._send_json({"items": recent_rows(items, limit=limit)})
+                return
+            if parsed.path == "/api/timeline":
+                if not self._require_auth():
+                    return
+                query = parse_qs(parsed.query)
+                granularity = "day" if query.get("granularity", ["month"])[0] == "day" else "month"
+                items = state.repository.timeline_items(owner_id=WEB_OWNER_ID)
+                self._send_json({"granularity": granularity, "periods": build_timeline(items, granularity=granularity)})
                 return
             self._send_json({"detail": "Not found"}, status=HTTPStatus.NOT_FOUND)
         except Exception as exc:

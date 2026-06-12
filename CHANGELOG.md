@@ -1,5 +1,19 @@
 # Changelog
 
+## Web API: stats / recent / timeline (2026-06-12)
+
+پاریتی داشبورد وب با قابلیت‌های جدید (لایه‌ی JSON API).
+
+### Behaviour
+- سه endpoint فقط-خواندنی `GET /api/stats`، `GET /api/recent?limit=N` و `GET /api/timeline?granularity=month|day` که آرشیو داشبورد (owner ثابت `0`) را برمی‌گردانند. مثل بقیه‌ی API با `WEB_API_TOKEN` (یا loopback در نبود توکن) محافظت می‌شوند و از همان متدهای repository و توابع خالص `recent_rows`/`build_timeline`/`archive_stats` استفاده می‌کنند.
+- helper `_query_int` برای خواندن امن و clamp‌شده‌ی پارامترهای عددی query.
+
+### Outside scope (follow-up)
+- نمایش این داده‌ها در رابط HTML داشبورد (فعلاً فقط JSON API).
+
+### Tests
+- `tests/test_web_api.py`: خروجی `/api/stats`، `/api/recent` (سقف limit و ترتیب) و `/api/timeline`، و الزام auth در غیرلوکال.
+
 ## Recent items browse (2026-06-12)
 
 مرور سریع آخرین آیتم‌ها — مکمل `/timeline` و `/digest`.
