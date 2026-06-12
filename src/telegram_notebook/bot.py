@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import shutil
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -14,6 +16,7 @@ from .clustering import build_topics
 from .config import Settings, get_settings
 from .db import Repository, connect
 from .embeddings import EmbeddingService
+from .extraction import ExtractionService
 from .jobs import JobWorker
 from .logging_config import setup_logging
 from .pipeline import IngestionPipeline
@@ -165,6 +168,15 @@ class NotebookBot:
             api_key=self._api_key_for_user(user, provider),
             model=model,
         )
+
+    def _extraction_service_for_user(self, user: dict | None) -> ExtractionService:
+        # OCR/PDF extraction uses Gemini multimodal regardless of transcription provider.
+        model = (
+            user.get("preferred_transcription_model")
+            if user and user.get("preferred_transcription_model")
+            else self.services.settings.transcription_model
+        )
+        return ExtractionService(provider="gemini", api_key=self._api_key_for_user(user, "gemini"), model=model)
 
     def _search_service_for_user(self, user: dict | None) -> SearchService:
         return SearchService(self.services.repository, self._embedding_service_for_user(user))
@@ -580,12 +592,111 @@ class NotebookBot:
             return "[Forwarded voice message]"
         return None
 
+    @staticmethod
+    def _forward_file_ref(message: dict) -> dict | None:
+        """Pick the single downloadable media file from a forwarded message."""
+        if "voice" in message:
+            v = message["voice"] or {}
+            return {"file_id": v.get("file_id"), "kind": "voice", "file_name": "voice.ogg", "mime_type": v.get("mime_type") or "audio/ogg"}
+        if "audio" in message:
+            a = message["audio"] or {}
+            return {"file_id": a.get("file_id"), "kind": "audio", "file_name": a.get("file_name") or "audio", "mime_type": a.get("mime_type") or "audio/mpeg"}
+        if "video" in message:
+            v = message["video"] or {}
+            return {"file_id": v.get("file_id"), "kind": "video", "file_name": v.get("file_name") or "video.mp4", "mime_type": v.get("mime_type") or "video/mp4"}
+        if "video_note" in message:
+            v = message["video_note"] or {}
+            return {"file_id": v.get("file_id"), "kind": "video_note", "file_name": "video_note.mp4", "mime_type": "video/mp4"}
+        if "document" in message:
+            d = message["document"] or {}
+            return {"file_id": d.get("file_id"), "kind": "document", "file_name": d.get("file_name") or "document", "mime_type": d.get("mime_type") or ""}
+        if "photo" in message:
+            sizes = message.get("photo") or []
+            if sizes:  # Telegram lists photo sizes ascending; take the largest
+                return {"file_id": sizes[-1].get("file_id"), "kind": "photo", "file_name": "photo.jpg", "mime_type": "image/jpeg"}
+        return None
+
+    @staticmethod
+    def _media_route(kind: str, mime_type: str | None) -> str | None:
+        """Which processor handles a media kind: 'transcribe', 'extract', or None."""
+        if kind in ("voice", "audio", "video", "video_note"):
+            return "transcribe"
+        mt = (mime_type or "").lower()
+        if kind == "photo":
+            return "extract"
+        if kind == "document":
+            if mt == "application/pdf" or mt.startswith("image/"):
+                return "extract"
+            if mt.startswith(("audio/", "video/")):
+                return "transcribe"
+        return None
+
+    def _process_forwarded_media(self, message: dict, *, transcription, extraction, download) -> str | None:
+        """Download the forward's media and turn it into text (transcript or OCR).
+
+        ``download(file_id, file_name)`` returns a local ``Path`` (or None). The
+        transcription/extraction services and download are injected so the routing
+        is fully testable without network or the event loop.
+        """
+        ref = self._forward_file_ref(message)
+        if not ref or not ref.get("file_id"):
+            return None
+        route = self._media_route(ref["kind"], ref.get("mime_type"))
+        if route is None:
+            return None
+        service = transcription if route == "transcribe" else extraction
+        if not (service and service.enabled):
+            return None
+        path = download(ref["file_id"], ref["file_name"])
+        if not path:
+            return None
+        try:
+            if route == "transcribe":
+                return (transcription.transcribe_media(path, path.parent) or "").strip()
+            return (extraction.extract(path) or "").strip()
+        except Exception:
+            logger.exception("Forwarded media %s failed", route)
+            return None
+
+    def _extract_forwarded_media(self, user: dict | None, message: dict) -> str | None:
+        """Wire real services + Bot API download around ``_process_forwarded_media``."""
+        tmpdir = Path(tempfile.mkdtemp(prefix="fwd_media_"))
+
+        def download(file_id: str, file_name: str) -> Path | None:
+            try:
+                meta = self.services.api.get_file(file_id)
+                file_path = meta.get("file_path")
+                if not file_path:
+                    return None
+                return self.services.api.download_file(str(file_path), tmpdir / (file_name or "file"))
+            except Exception:
+                logger.exception("Failed to download forwarded media")
+                return None
+
+        try:
+            return self._process_forwarded_media(
+                message,
+                transcription=self._transcription_service_for_user(user),
+                extraction=self._extraction_service_for_user(user),
+                download=download,
+            )
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
     def _handle_forwarded(self, chat_id: int, bot_user_id: int, message: dict) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
         label = self._forward_source_label(message)
         raw_text = str(message.get("text") or message.get("caption") or "").strip()
         media_tag = self._forward_media_tag(message)
-        body = "\n".join(part for part in (media_tag, raw_text) if part).strip()
+
+        # Download and process any attached media (audio/video -> transcript, image/PDF -> OCR).
+        file_ref = self._forward_file_ref(message)
+        extracted_text = None
+        if file_ref:
+            self.services.api.send_message(chat_id, "Processing forwarded media…")
+            extracted_text = self._extract_forwarded_media(user, message)
+
+        body = "\n".join(part for part in (media_tag, raw_text, extracted_text) if part).strip()
         if not body:
             self.services.api.send_message(
                 chat_id,
@@ -593,6 +704,13 @@ class NotebookBot:
                 "(photos or files without a caption) aren't indexed in this version.",
             )
             return
+        # Media was attached but produced no text (no Gemini key, or unsupported type).
+        if file_ref and not extracted_text and not raw_text:
+            self.services.api.send_message(
+                chat_id,
+                "Saved the media reference, but I couldn't read its contents. "
+                "Connect a Gemini API key (via /connect) so I can transcribe audio/video and OCR images/PDFs.",
+            )
 
         forward_key = int(message["message_id"])
         message_url = self._forward_message_url(message)
@@ -626,7 +744,8 @@ class NotebookBot:
             self.services.api.send_message(chat_id, "You've already saved this forward.")
             return
 
-        reply = f"Saved to your inbox from “{html.escape(label)}”. Use /search or /ask to query it."
+        prefix = "Transcribed and saved" if extracted_text else "Saved"
+        reply = f"{prefix} to your inbox from “{html.escape(label)}”. Use /search or /ask to query it."
         if self._auto_forward(user=user, label=label, tags=tags, text=body, message_url=message_url):
             tag_str = ", ".join(f"#{html.escape(t)}" for t in sorted(tags))
             reply += f"\nAuto-forwarded to your archive ({tag_str})."

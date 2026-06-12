@@ -1,5 +1,24 @@
 # Changelog
 
+## Forwarded media processing (2026-06-12)
+
+تکمیل Forwarded Inbox: مدیای فورواردشده دانلود و به متن قابل‌جستجو تبدیل می‌شود.
+
+### Behaviour
+- فایل‌های صوت/ویدیو/voice/video_note به‌صورت خودکار transcribe می‌شوند (همان `TranscriptionService`)، و عکس‌ها و اسناد PDF/تصویری با OCR (Gemini multimodal) به متن تبدیل می‌شوند. متن استخراج‌شده در inbox ذخیره، تگ‌گذاری، embed و قابل `/search`/`/ask` می‌شود (و در صورت تطبیق tag، auto-forward هم می‌شود).
+- اگر کلید Gemini نباشد یا نوع مدیا پشتیبانی نشود، به کاربر اطلاع داده می‌شود و فقط ارجاع/کپشن ذخیره می‌شود.
+
+### Components
+- `TelegramBotApi.get_file` + `download_file` (و `file_base_url`) برای دانلود فایل از Bot API.
+- `provider_http.gemini_extract_document` (OCR/استخراج متن چندوجهی) و سرویس نازک `ExtractionService` هم‌سطح `TranscriptionService`.
+- در `bot.py`: helperهای خالص `_forward_file_ref` (انتخاب فایل، بزرگ‌ترین سایز عکس) و `_media_route` (مسیر transcribe/extract)، و هسته‌ی orchestration `_process_forwarded_media` با تزریق سرویس‌ها و download برای تست آفلاین کامل.
+
+### Outside scope (follow-up)
+- استخراج DOCX/Excel و پردازش مدیا در مسیر import کامل کانال.
+
+### Tests
+- `tests/test_inbox_media.py`: انتخاب فایل و routing، orchestration برای transcribe/extract، رد در نبود سرویس/route/دانلود، بلعیدن خطای سرویس، و `file_base_url`.
+
 ## AI-based rules (2026-06-12)
 
 قوانین tag مبتنی بر LLM، در کنار قوانین keyword موجود.
