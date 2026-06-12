@@ -1,5 +1,18 @@
 # Changelog
 
+## Recent items browse (2026-06-12)
+
+مرور سریع آخرین آیتم‌ها — مکمل `/timeline` و `/digest`.
+
+### Behaviour
+- `/recent [n]` (پیش‌فرض ۱۰، حداکثر ۵۰) آخرین آیتم‌ها را با منبع، تاریخ، snippet و لینک نشان می‌دهد. ابزار MCP `list_recent` همان فهرست را می‌دهد.
+
+### Components
+- ماژول خالص `recent.py` با `recent_rows(items, *, limit, snippet_chars)` (نرمال‌سازی whitespace و کوتاه‌سازی snippet)؛ از `timeline_items` (جدیدترین اول) تغذیه می‌شود.
+
+### Tests
+- `tests/test_recent.py`: نرمال‌سازی/سقف `recent_rows`، منبع ناشناخته، هندلر (ترتیب جدید→قدیم و آرشیو خالی)، و ابزار MCP.
+
 ## Tag management (2026-06-12)
 
 مدیریت دستی تگ‌ها (rename / merge / delete).
