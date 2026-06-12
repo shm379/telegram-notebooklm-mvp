@@ -230,6 +230,8 @@ class Repository:
         cols = [row[1] for row in conn.execute("PRAGMA table_info(bot_users)").fetchall()]
         if "archive_chat_id" not in cols:
             conn.execute("ALTER TABLE bot_users ADD COLUMN archive_chat_id TEXT")
+        if "ai_autotag" not in cols:
+            conn.execute("ALTER TABLE bot_users ADD COLUMN ai_autotag INTEGER DEFAULT 0")
 
     @staticmethod
     def _ensure_rule_columns(conn: sqlite3.Connection) -> None:
@@ -460,6 +462,15 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 conn.row_factory = sqlite3.Row
                 res = conn.execute("SELECT * FROM bot_users WHERE bot_user_id = ?", (bot_user_id,)).fetchone()
                 return _decrypt_row(dict(res), _BOT_USER_SECRETS) if res else None
+
+    def set_ai_autotag(self, *, bot_user_id: int, enabled: bool) -> None:
+        """Toggle whether AI rules run automatically on the user's new forwards."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "UPDATE bot_users SET ai_autotag = ? WHERE bot_user_id = ?",
+                    (1 if enabled else 0, bot_user_id),
+                )
 
     def set_archive_chat(self, *, bot_user_id: int, archive_chat_id: str | None) -> None:
         """Set (or clear, when ``None``) the channel/chat that tagged forwards are auto-forwarded to."""

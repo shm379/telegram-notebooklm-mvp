@@ -1,5 +1,20 @@
 # Changelog
 
+## Opt-in AI auto-tagging on forwards (2026-06-12)
+
+تکمیل AI rules: اجرای خودکار آن‌ها روی فورواردهای جدید، به‌صورت opt-in.
+
+### Behaviour
+- `/airules on|off` (پیش‌فرض خاموش) تعیین می‌کند که قوانین AI روی هر فوروارد جدید به‌صورت خودکار اجرا شوند یا نه. در حالت روشن، به‌ازای هر آیتم یک فراخوانی LLM انجام می‌شود؛ **import انبوه کانال هیچ‌وقت auto-classify نمی‌شود** (هزینه کنترل‌شده).
+- نیازمند کلید Gemini؛ در نبود کلید هنگام روشن‌کردن اطلاع داده می‌شود.
+
+### Design
+- `IngestionPipeline` پارامتر اختیاری `ai_classifier` گرفت؛ `_apply_rules` در صورت وجود آن، قوانین AI را هم اعمال می‌کند (با بلعیدن خطا). فقط مسیر Forwarded Inbox آن را wire می‌کند (و فقط وقتی کاربر opt-in کرده و کلید دارد).
+- ستون `ai_autotag` روی `bot_users` با مهاجرت idempotent؛ `Repository.set_ai_autotag` و helper `_ai_classifier_for_user`.
+
+### Tests
+- `tests/test_ai_autotag.py`: اعمال AI rules فقط با classifier، بلعیدن خطای classifier، persist تنظیم، گیتینگ `_ai_classifier_for_user`، و هندلر `/airules`.
+
 ## Query collections (2026-06-12)
 
 تکمیل Collections: حالا یک دفترچه قابل خلاصه/خروجی‌گرفتن است.

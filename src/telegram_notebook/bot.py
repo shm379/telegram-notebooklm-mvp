@@ -282,6 +282,8 @@ class NotebookBot:
             self._handle_tag(chat_id, bot_user_id, text.removeprefix("/tag").strip())
         elif command == "/collection":
             self._handle_collection(chat_id, bot_user_id, text.removeprefix("/collection").strip())
+        elif command == "/airules":
+            self._handle_airules(chat_id, bot_user_id, text.removeprefix("/airules").strip())
         elif command == "/setarchive":
             self._handle_setarchive(chat_id, bot_user_id, text.removeprefix("/setarchive").strip())
         elif command == "/summarize":
@@ -373,6 +375,7 @@ class NotebookBot:
             "/rule list — show your rules\n"
             "/rule remove &lt;id&gt; — delete a rule\n"
             "/rule apply — re-tag existing content with current rules\n"
+            "/airules on|off — auto-run AI rules on each new forward (opt-in)\n"
             "/tags — list your tags and their counts\n"
             "/tag rename &lt;old&gt; -&gt; &lt;new&gt; · /tag delete &lt;tag&gt; — manage tags\n"
             "/collection new|add|list|remove|show — group tags into notebooks\n"
@@ -746,6 +749,7 @@ class NotebookBot:
                 repository=self.services.repository,
                 transcription=self._transcription_service_for_user(user),
                 embeddings=self._embedding_service_for_user(user),
+                ai_classifier=self._ai_classifier_for_user(user),
             )
             return await pipeline.ingest_forwarded_message(
                 owner_id=bot_user_id,
@@ -1116,6 +1120,41 @@ class NotebookBot:
             )
 
         return namer
+
+    def _ai_classifier_for_user(self, user: dict | None):
+        """LLM callable for AI-rule auto-tagging, or None unless the user opted in (with a key)."""
+        if not (user and user.get("ai_autotag")):
+            return None
+        api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
+        if not api_key:
+            return None
+        return lambda prompt: gemini_generate_content(
+            api_key=api_key,
+            prompt=prompt,
+            project_id=self.services.settings.vertex_project_id,
+            region=self.services.settings.vertex_region or "us-central1",
+        )
+
+    def _handle_airules(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        choice = args.strip().lower()
+        if choice in ("on", "off"):
+            self.services.repository.set_ai_autotag(bot_user_id=bot_user_id, enabled=(choice == "on"))
+            if choice == "on":
+                user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+                has_key = bool((user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key)
+                note = "" if has_key else "\nNote: connect a Gemini API key (via /connect) for this to take effect."
+                self.services.api.send_message(chat_id, "AI auto-tagging of new forwards is ON." + note)
+            else:
+                self.services.api.send_message(chat_id, "AI auto-tagging of new forwards is OFF.")
+            return
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        state = "ON" if (user and user.get("ai_autotag")) else "OFF"
+        self.services.api.send_message(
+            chat_id,
+            f"AI auto-tagging is {state}. Use /airules on|off.\n"
+            "When ON, your AI rules (/rule add-ai) run automatically on each new forward "
+            "(one LLM call per item). Bulk channel imports are never auto-classified.",
+        )
 
     def _handle_timeline(self, chat_id: int, bot_user_id: int, args: str) -> None:
         granularity = "day" if "--day" in args.split() else "month"
