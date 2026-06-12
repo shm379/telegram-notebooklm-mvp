@@ -376,6 +376,7 @@ class NotebookBot:
             "/tags — list your tags and their counts\n"
             "/tag rename &lt;old&gt; -&gt; &lt;new&gt; · /tag delete &lt;tag&gt; — manage tags\n"
             "/collection new|add|list|remove|show — group tags into notebooks\n"
+            "  (then /summarize --collection &lt;name&gt; or /export --collection &lt;name&gt;)\n"
             "/setarchive &lt;@channel|off&gt; — auto-forward tagged forwards to an archive channel\n\n"
             "<b>Forwarded Inbox</b>\n"
             "Forward any message to me and I'll save its text/caption to your "
@@ -954,16 +955,42 @@ class NotebookBot:
             msg += f"\nNote: {len(ai_rules)} AI rule(s) were skipped — connect a Gemini API key (via /connect) to enable them."
         self.services.api.send_message(chat_id, msg)
 
+    @staticmethod
+    def _extract_collection(args: str) -> tuple[str | None, str]:
+        """Pull a ``--collection <name>`` flag out of ``args``; return (name, remaining)."""
+        tokens = args.split()
+        if "--collection" not in tokens:
+            return None, args
+        i = tokens.index("--collection")
+        name = tokens[i + 1] if i + 1 < len(tokens) else ""
+        end = i + 2 if name else i + 1
+        return (name or None), " ".join(tokens[:i] + tokens[end:])
+
+    def _collection_items(self, bot_user_id: int, name: str) -> tuple[list | None, str]:
+        """Resolve a collection to its items + scope label, or (None, _) if it doesn't exist."""
+        tags = self.services.repository.collection_tags(owner_id=bot_user_id, name=name)
+        if tags is None:
+            return None, name
+        items = self.services.repository.items_for_tags(owner_id=bot_user_id, tags=tags, limit=2000)
+        return items, f"collection “{name}”"
+
     def _handle_summarize(self, chat_id: int, bot_user_id: int, args: str) -> None:
-        _, source, tag = self._split_filters(args)
-        items = self.services.repository.summary_items(owner_id=bot_user_id, channel_url=source, tag=tag)
+        collection, args = self._extract_collection(args)
+        if collection:
+            items, scope_label = self._collection_items(bot_user_id, collection)
+            if items is None:
+                self.services.api.send_message(chat_id, f"Collection “{html.escape(collection)}” not found.")
+                return
+        else:
+            _, source, tag = self._split_filters(args)
+            items = self.services.repository.summary_items(owner_id=bot_user_id, channel_url=source, tag=tag)
+            scope_label = tag or source or "your whole archive"
         if not items:
             self.services.api.send_message(
                 chat_id,
                 "Nothing to summarize yet. Ingest a channel, forward messages, or check your /sources and /tags.",
             )
             return
-        scope_label = tag or source or "your whole archive"
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
         gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
         vertex_config = self._vertex_search_config(user)
@@ -1107,14 +1134,23 @@ class NotebookBot:
         self.services.api.send_message(chat_id, "\n".join(lines))
 
     def _handle_export(self, chat_id: int, bot_user_id: int, args: str) -> None:
-        _, source, tag = self._split_filters(args)
-        items = self.services.repository.summary_items(owner_id=bot_user_id, channel_url=source, tag=tag, limit=2000)
+        collection, args = self._extract_collection(args)
+        if collection:
+            items, scope = self._collection_items(bot_user_id, collection)
+            if items is None:
+                self.services.api.send_message(chat_id, f"Collection “{html.escape(collection)}” not found.")
+                return
+            slug_source = collection
+        else:
+            _, source, tag = self._split_filters(args)
+            items = self.services.repository.summary_items(owner_id=bot_user_id, channel_url=source, tag=tag, limit=2000)
+            scope = tag or source or "your whole archive"
+            slug_source = tag or source or "archive"
         if not items:
             self.services.api.send_message(chat_id, "Nothing to export yet. Ingest a channel or forward messages first.")
             return
-        scope = tag or source or "your whole archive"
         markdown = build_markdown_export(scope, items)
-        slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (tag or source or "archive")).strip("-").lower() or "archive"
+        slug = re.sub(r"[^A-Za-z0-9_-]+", "-", slug_source).strip("-").lower() or "archive"
         tmpdir = Path(tempfile.mkdtemp(prefix="export_"))
         path = tmpdir / f"telegram-{slug}.md"
         path.write_text(markdown, encoding="utf-8")
