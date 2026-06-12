@@ -277,6 +277,8 @@ class NotebookBot:
             self._handle_rule(chat_id, bot_user_id, text.removeprefix("/rule").strip())
         elif command == "/tags":
             self._handle_tags(chat_id, bot_user_id)
+        elif command == "/tag":
+            self._handle_tag(chat_id, bot_user_id, text.removeprefix("/tag").strip())
         elif command == "/setarchive":
             self._handle_setarchive(chat_id, bot_user_id, text.removeprefix("/setarchive").strip())
         elif command == "/summarize":
@@ -366,6 +368,7 @@ class NotebookBot:
             "/rule remove &lt;id&gt; — delete a rule\n"
             "/rule apply — re-tag existing content with current rules\n"
             "/tags — list your tags and their counts\n"
+            "/tag rename &lt;old&gt; -&gt; &lt;new&gt; · /tag delete &lt;tag&gt; — manage tags\n"
             "/setarchive &lt;@channel|off&gt; — auto-forward tagged forwards to an archive channel\n\n"
             "<b>Forwarded Inbox</b>\n"
             "Forward any message to me and I'll save its text/caption to your "
@@ -1098,6 +1101,35 @@ class NotebookBot:
     def _handle_stats(self, chat_id: int, bot_user_id: int) -> None:
         stats = self.services.repository.archive_stats(owner_id=bot_user_id)
         self.services.api.send_message(chat_id, f"<b>Archive stats</b>\n{html.escape(format_stats(stats))}")
+
+    def _handle_tag(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        parts = args.split(maxsplit=1)
+        sub = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub == "rename":
+            old, sep, new = rest.partition("->")
+            old, new = old.strip(), new.strip()
+            if not old or not new:
+                self.services.api.send_message(chat_id, "Usage: /tag rename &lt;old&gt; -> &lt;new&gt;")
+                return
+            moved = self.services.repository.rename_tag(owner_id=bot_user_id, old_tag=old, new_tag=new)
+            if moved:
+                self.services.api.send_message(chat_id, f"Renamed “{html.escape(old)}” → “{html.escape(new)}” ({moved} item(s)).")
+            else:
+                self.services.api.send_message(chat_id, f"No items were tagged “{html.escape(old)}”.")
+        elif sub == "delete":
+            tag = rest.strip()
+            if not tag:
+                self.services.api.send_message(chat_id, "Usage: /tag delete &lt;tag&gt;")
+                return
+            removed = self.services.repository.delete_tag(owner_id=bot_user_id, tag=tag)
+            if removed:
+                self.services.api.send_message(chat_id, f"Deleted tag “{html.escape(tag)}” from {removed} item(s).")
+            else:
+                self.services.api.send_message(chat_id, f"No items were tagged “{html.escape(tag)}”.")
+        else:
+            self.services.api.send_message(chat_id, "Usage: /tag rename &lt;old&gt; -> &lt;new&gt;  ·  /tag delete &lt;tag&gt;")
 
     def _handle_tags(self, chat_id: int, bot_user_id: int) -> None:
         tags = self.services.repository.list_tags(owner_id=bot_user_id)
