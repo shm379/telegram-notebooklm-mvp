@@ -1,5 +1,18 @@
 # Changelog
 
+## Timeline (2026-06-11)
+
+نمای زمانی آرشیو — مکمل زمانیِ topic clustering.
+
+### Behaviour
+- ماژول جدید `timeline.py` (pure-Python، بدون وابستگی): `build_timeline` آیتم‌های دارای تاریخ را در bucketهای تقویمی (ماه `YYYY-MM` یا روز `YYYY-MM-DD`) گروه می‌کند و per-period شمارش/منابع/نمونه می‌دهد؛ چون تاریخ‌ها ISO 8601 هستند، bucket فقط prefix تاریخ است. تاریخ‌های نامعتبر کنار گذاشته می‌شوند.
+- `Repository.timeline_items` آیتم‌های دارای `message_date` را (scoped به owner + source/tag، جدیدترین اول) برمی‌گرداند.
+- دستور ربات `/timeline [--source <url>] [--tag <tag>] [--day]` (پیش‌فرض ماه) و ابزار MCP `timeline`. فیلدهای کاربر در خروجی HTML با `html.escape` فرار داده می‌شوند.
+- `/help`، README و CHANGELOG به‌روز شدند.
+
+### Tests
+- `tests/test_timeline.py`: `period_key` (bucket و رد تاریخ بد)، گروه‌بندی ماه/روز و ترتیب نزولی، scoping و ترتیب `timeline_items`، و ابزار MCP `timeline`.
+
 ## Fix: HTML-escape archive forwards (2026-06-11)
 
 - چون `send_message` با `parse_mode: HTML` ارسال می‌کند، فیلدهای کاربر-کنترل (label منبع، tagها، متن، لینک) در auto-forward و پیام تأیید inbox حالا با `html.escape` فرار داده می‌شوند. پیش‌تر وجود `<`، `>` یا `&` باعث خطای parser تلگرام و در نتیجه نرسیدن بی‌صدای آیتم به کانال آرشیو می‌شد.

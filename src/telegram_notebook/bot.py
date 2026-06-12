@@ -20,6 +20,7 @@ from .pipeline import IngestionPipeline
 from .rules import match_tags
 from .search import SearchService
 from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
+from .timeline import build_timeline
 from .transcription import TranscriptionService
 
 logger = logging.getLogger(__name__)
@@ -266,6 +267,8 @@ class NotebookBot:
             self._handle_summarize(chat_id, bot_user_id, text.removeprefix("/summarize").strip())
         elif command == "/topics":
             self._handle_topics(chat_id, bot_user_id, text.removeprefix("/topics").strip())
+        elif command == "/timeline":
+            self._handle_timeline(chat_id, bot_user_id, text.removeprefix("/timeline").strip())
         elif command == "/join":
             self._handle_join(chat_id, bot_user_id, text.removeprefix("/join").strip())
         elif command == "/ingest":
@@ -327,6 +330,7 @@ class NotebookBot:
             "/ask &lt;question&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — ask the AI over your archive\n"
             "/summarize [--source &lt;url&gt;] [--tag &lt;tag&gt;] — summarize a source, tag, or your whole archive\n"
             "/topics [--source &lt;url&gt;] [--tag &lt;tag&gt;] — cluster your content into topics\n"
+            "/timeline [--source &lt;url&gt;] [--tag &lt;tag&gt;] [--day] — browse your archive by date\n"
             "/sources — list indexed sources\n"
             "/delete &lt;channel_url&gt; — delete a source's data\n"
             "/cancel — cancel the current flow\n\n"
@@ -821,6 +825,22 @@ class NotebookBot:
             lines.append(f"\n• <b>{topic['label']}</b> ({topic['size']})")
             if topic["sample"]:
                 lines.append(f"  {topic['sample']}")
+        self.services.api.send_message(chat_id, "\n".join(lines))
+
+    def _handle_timeline(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        granularity = "day" if "--day" in args.split() else "month"
+        _, source, tag = self._split_filters(args)
+        items = self.services.repository.timeline_items(owner_id=bot_user_id, channel_url=source, tag=tag)
+        if not items:
+            self.services.api.send_message(chat_id, "No dated content yet. Ingest a channel or forward messages first.")
+            return
+        periods = build_timeline(items, granularity=granularity)
+        scope = tag or source or "your archive"
+        lines = [f"<b>Timeline — {html.escape(scope)}</b> ({len(items)} item(s), by {granularity})"]
+        for p in periods[:24]:
+            sources = ", ".join(html.escape(s) for s in p["sources"][:3])
+            suffix = f" — {sources}" if sources else ""
+            lines.append(f"• <b>{p['period']}</b>: {p['count']} item(s){suffix}")
         self.services.api.send_message(chat_id, "\n".join(lines))
 
     def _handle_tags(self, chat_id: int, bot_user_id: int) -> None:
