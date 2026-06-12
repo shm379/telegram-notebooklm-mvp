@@ -280,6 +280,8 @@ class NotebookBot:
             self._handle_tags(chat_id, bot_user_id)
         elif command == "/tag":
             self._handle_tag(chat_id, bot_user_id, text.removeprefix("/tag").strip())
+        elif command == "/collection":
+            self._handle_collection(chat_id, bot_user_id, text.removeprefix("/collection").strip())
         elif command == "/setarchive":
             self._handle_setarchive(chat_id, bot_user_id, text.removeprefix("/setarchive").strip())
         elif command == "/summarize":
@@ -373,6 +375,7 @@ class NotebookBot:
             "/rule apply — re-tag existing content with current rules\n"
             "/tags — list your tags and their counts\n"
             "/tag rename &lt;old&gt; -&gt; &lt;new&gt; · /tag delete &lt;tag&gt; — manage tags\n"
+            "/collection new|add|list|remove|show — group tags into notebooks\n"
             "/setarchive &lt;@channel|off&gt; — auto-forward tagged forwards to an archive channel\n\n"
             "<b>Forwarded Inbox</b>\n"
             "Forward any message to me and I'll save its text/caption to your "
@@ -1158,6 +1161,70 @@ class NotebookBot:
                 self.services.api.send_message(chat_id, f"No items were tagged “{html.escape(tag)}”.")
         else:
             self.services.api.send_message(chat_id, "Usage: /tag rename &lt;old&gt; -> &lt;new&gt;  ·  /tag delete &lt;tag&gt;")
+
+    def _handle_collection(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        repo = self.services.repository
+        parts = args.split(maxsplit=1)
+        sub = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub == "new":
+            name = rest.split()[0] if rest else ""
+            if not name:
+                self.services.api.send_message(chat_id, "Usage: /collection new &lt;name&gt; (one word)")
+                return
+            repo.create_collection(owner_id=bot_user_id, name=name, created_at=datetime.now(UTC).isoformat())
+            self.services.api.send_message(chat_id, f"Collection “{html.escape(name)}” created. Add tags with /collection add {html.escape(name)} &lt;tag&gt;.")
+        elif sub == "add":
+            toks = rest.split(maxsplit=1)
+            if len(toks) < 2:
+                self.services.api.send_message(chat_id, "Usage: /collection add &lt;name&gt; &lt;tag&gt;")
+                return
+            name, tag = toks[0], toks[1].strip()
+            if repo.add_collection_tag(owner_id=bot_user_id, name=name, tag=tag):
+                self.services.api.send_message(chat_id, f"Added “{html.escape(tag)}” to collection “{html.escape(name)}”.")
+            else:
+                self.services.api.send_message(chat_id, f"Collection “{html.escape(name)}” not found. Create it with /collection new {html.escape(name)}.")
+        elif sub in ("", "list"):
+            cols = repo.list_collections(owner_id=bot_user_id)
+            if not cols:
+                self.services.api.send_message(chat_id, "No collections yet. Create one with /collection new &lt;name&gt;.")
+                return
+            lines = ["<b>Your collections</b>"]
+            for c in cols:
+                tags = ", ".join(c["tags"]) or "—"
+                lines.append(f"• <b>{html.escape(c['name'])}</b>: {html.escape(tags)}")
+            self.services.api.send_message(chat_id, "\n".join(lines))
+        elif sub == "remove":
+            name = rest.split()[0] if rest else ""
+            if not name:
+                self.services.api.send_message(chat_id, "Usage: /collection remove &lt;name&gt;")
+                return
+            if repo.remove_collection(owner_id=bot_user_id, name=name):
+                self.services.api.send_message(chat_id, f"Collection “{html.escape(name)}” removed.")
+            else:
+                self.services.api.send_message(chat_id, f"Collection “{html.escape(name)}” not found.")
+        elif sub == "show":
+            name = rest.split()[0] if rest else ""
+            tags = repo.collection_tags(owner_id=bot_user_id, name=name) if name else None
+            if tags is None:
+                self.services.api.send_message(chat_id, f"Collection “{html.escape(name)}” not found.")
+                return
+            if not tags:
+                self.services.api.send_message(chat_id, f"Collection “{html.escape(name)}” has no tags yet. Add some with /collection add {html.escape(name)} &lt;tag&gt;.")
+                return
+            items = repo.items_for_tags(owner_id=bot_user_id, tags=tags, limit=10)
+            lines = [f"<b>{html.escape(name)}</b> — tags: {html.escape(', '.join(tags))} · {len(items)} recent item(s)"]
+            for row in recent_rows(items, limit=10):
+                head = f"\n• <b>{html.escape(row['source'])}</b>"
+                if row["date"]:
+                    head += f" · {row['date']}"
+                lines.append(head)
+                if row["snippet"]:
+                    lines.append(f"  {html.escape(row['snippet'])}")
+            self.services.api.send_message(chat_id, "\n".join(lines))
+        else:
+            self.services.api.send_message(chat_id, "Usage: /collection new|add|list|remove|show")
 
     def _handle_tags(self, chat_id: int, bot_user_id: int) -> None:
         tags = self.services.repository.list_tags(owner_id=bot_user_id)

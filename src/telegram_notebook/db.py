@@ -201,6 +201,24 @@ class Repository:
                         updated_at TEXT
                     )
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS collections (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER,
+                        name TEXT,
+                        created_at TEXT
+                    )
+                """)
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_owner_name ON collections(owner_id, name)"
+                )
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS collection_tags (
+                        collection_id INTEGER,
+                        tag TEXT,
+                        PRIMARY KEY (collection_id, tag)
+                    )
+                """)
                 self._ensure_channel_owner(conn)
                 self._ensure_bot_user_columns(conn)
                 self._ensure_rule_columns(conn)
@@ -641,6 +659,101 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 cur = conn.execute("DELETE FROM content_tags WHERE owner_id = ? AND tag = ?", (owner_id, tag))
                 conn.commit()
                 return cur.rowcount
+
+    # --- Collections (named bundles of tags) -------------------------------
+
+    def create_collection(self, *, owner_id: int, name: str, created_at: str | None = None) -> int:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO collections (owner_id, name, created_at) VALUES (?, ?, ?)",
+                    (owner_id, name, created_at),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT id FROM collections WHERE owner_id = ? AND name = ?", (owner_id, name)
+                ).fetchone()
+                return row[0] if row else 0
+
+    def _collection_id(self, conn: sqlite3.Connection, owner_id: int, name: str) -> int | None:
+        row = conn.execute(
+            "SELECT id FROM collections WHERE owner_id = ? AND name = ?", (owner_id, name)
+        ).fetchone()
+        return row[0] if row else None
+
+    def add_collection_tag(self, *, owner_id: int, name: str, tag: str) -> bool:
+        """Add a tag to a collection. Returns False if the collection doesn't exist."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cid = self._collection_id(conn, owner_id, name)
+                if cid is None:
+                    return False
+                conn.execute(
+                    "INSERT OR IGNORE INTO collection_tags (collection_id, tag) VALUES (?, ?)", (cid, tag)
+                )
+                conn.commit()
+                return True
+
+    def list_collections(self, *, owner_id: int) -> list[dict[str, Any]]:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                cols = conn.execute(
+                    "SELECT id, name FROM collections WHERE owner_id = ? ORDER BY name", (owner_id,)
+                ).fetchall()
+                out = []
+                for c in cols:
+                    tags = [r[0] for r in conn.execute(
+                        "SELECT tag FROM collection_tags WHERE collection_id = ? ORDER BY tag", (c["id"],)
+                    ).fetchall()]
+                    out.append({"id": c["id"], "name": c["name"], "tags": tags})
+                return out
+
+    def collection_tags(self, *, owner_id: int, name: str) -> list[str] | None:
+        """Tags in a collection, or None if the collection doesn't exist."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cid = self._collection_id(conn, owner_id, name)
+                if cid is None:
+                    return None
+                return [r[0] for r in conn.execute(
+                    "SELECT tag FROM collection_tags WHERE collection_id = ? ORDER BY tag", (cid,)
+                ).fetchall()]
+
+    def remove_collection(self, *, owner_id: int, name: str) -> bool:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cid = self._collection_id(conn, owner_id, name)
+                if cid is None:
+                    return False
+                conn.execute("DELETE FROM collection_tags WHERE collection_id = ?", (cid,))
+                conn.execute("DELETE FROM collections WHERE id = ?", (cid,))
+                conn.commit()
+                return True
+
+    def items_for_tags(self, *, owner_id: int, tags: list[str], limit: int = 200) -> list[dict[str, Any]]:
+        """Distinct content items carrying ANY of ``tags`` (text + source), newest first."""
+        if not tags:
+            return []
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                placeholders = ",".join("?" for _ in tags)
+                rows = conn.execute(
+                    f"""
+                    SELECT m.message_date, mi.transcript_text AS text, ch.channel_title, ch.channel_url, m.message_url
+                    FROM media_items mi
+                    JOIN messages m ON mi.message_id = m.id
+                    JOIN channels ch ON m.channel_id = ch.id
+                    WHERE ch.owner_id = ? AND mi.transcript_text IS NOT NULL AND mi.transcript_text != ''
+                      AND mi.id IN (
+                        SELECT media_item_id FROM content_tags WHERE owner_id = ? AND tag IN ({placeholders})
+                      )
+                    ORDER BY m.message_date DESC LIMIT ?
+                    """,
+                    (owner_id, owner_id, *tags, limit),
+                ).fetchall()
+                return [dict(r) for r in rows]
 
     def media_texts(self, *, owner_id: int) -> list[dict[str, Any]]:
         """Every stored media item for the owner with its transcript/text, for re-tagging."""
