@@ -9,7 +9,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .bot_api import TelegramBotApi
@@ -281,6 +281,8 @@ class NotebookBot:
             self._handle_setarchive(chat_id, bot_user_id, text.removeprefix("/setarchive").strip())
         elif command == "/summarize":
             self._handle_summarize(chat_id, bot_user_id, text.removeprefix("/summarize").strip())
+        elif command == "/digest":
+            self._handle_digest(chat_id, bot_user_id, text.removeprefix("/digest").strip())
         elif command == "/topics":
             self._handle_topics(chat_id, bot_user_id, text.removeprefix("/topics").strip())
         elif command == "/timeline":
@@ -349,6 +351,7 @@ class NotebookBot:
             "/search &lt;query&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — keyword/semantic search\n"
             "/ask &lt;question&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — ask the AI over your archive\n"
             "/summarize [--source &lt;url&gt;] [--tag &lt;tag&gt;] — summarize a source, tag, or your whole archive\n"
+            "/digest [days] — AI recap of recent content (default 7 days)\n"
             "/topics [--source &lt;url&gt;] [--tag &lt;tag&gt;] — cluster your content into topics\n"
             "/timeline [--source &lt;url&gt;] [--tag &lt;tag&gt;] [--day] — browse your archive by date\n"
             "/export [--source &lt;url&gt;] [--tag &lt;tag&gt;] — download a Markdown export\n"
@@ -971,6 +974,49 @@ class NotebookBot:
             self.services.api.send_message(chat_id, "Sorry, I couldn't generate a summary right now. Please try again later.")
             return
         self.services.api.send_message(chat_id, f"<b>Summary — {scope_label}</b>\n\n{answer}")
+
+    def _handle_digest(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        days = 7
+        tokens = args.split()
+        if tokens:
+            try:
+                days = max(1, min(90, int(tokens[0])))
+            except ValueError:
+                pass
+        since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        items = self.services.repository.recent_items(owner_id=bot_user_id, since_date=since)
+        scope_label = f"the last {days} day(s)"
+        if not items:
+            self.services.api.send_message(chat_id, f"No new content in {scope_label}.")
+            return
+
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
+        if not gemini_api_key:
+            # Without an LLM key, fall back to a plain count + sources digest.
+            sources = sorted({
+                (it.get("channel_title") or it.get("channel_url"))
+                for it in items if it.get("channel_title") or it.get("channel_url")
+            })
+            msg = f"<b>Digest — {scope_label}</b>\n{len(items)} new item(s)."
+            if sources:
+                msg += "\nSources: " + ", ".join(html.escape(s) for s in sources[:10])
+            self.services.api.send_message(chat_id, msg)
+            return
+
+        vertex_config = self._vertex_search_config(user)
+        v_project = vertex_config["project_id"] if vertex_config else self.services.settings.vertex_project_id
+        v_region = vertex_config["region"] if vertex_config else self.services.settings.vertex_region
+        self.services.api.send_message(chat_id, f"Building your digest for {scope_label} ({len(items)} item(s))...")
+        try:
+            answer = self._search_service_for_user(user).summarize(
+                scope_label=scope_label, items=items, api_key=gemini_api_key, project_id=v_project, region=v_region,
+            )
+        except Exception:
+            logger.exception("Digest failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, "Sorry, I couldn't build the digest right now. Please try again later.")
+            return
+        self.services.api.send_message(chat_id, f"<b>Digest — {scope_label}</b>\n\n{answer}")
 
     def _handle_topics(self, chat_id: int, bot_user_id: int, args: str) -> None:
         _, source, tag = self._split_filters(args)
