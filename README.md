@@ -70,6 +70,7 @@
 - **Timeline**: `/timeline` آرشیو را بر اساس تاریخ (ماه یا روز) گروه‌بندی می‌کند — مکمل زمانیِ `/topics`
 - **Export**: `/export` کل آرشیو، یک منبع یا یک تگ را به‌صورت یک فایل Markdown قابل‌دانلود خروجی می‌گیرد
 - **Stats**: `/stats` نمای کلی آرشیو (تعداد آیتم‌ها، منابع، تگ‌ها، نوع مدیا، و بازه‌ی زمانی) را نشان می‌دهد
+- **Collections (Notebooks)**: `/collection` چند تگ را زیر یک نام گروه می‌کند و آیتم‌های مجموعه را نشان می‌دهد
 - **MCP Server (read-only)**: expose کردن آرشیو به ابزارهای AI با JSON-RPC روی stdio (`python -m telegram_notebook.mcp_server`)
 
 ---
@@ -215,6 +216,9 @@ Python Backend
 
 /tag delete <tag>
 حذف یک تگ از همه‌ی آیتم‌ها
+
+/collection new|add|list|remove|show <name>
+گروه‌بندی چند تگ زیر یک «دفترچه» و نمایش آیتم‌های آن
 
 /setarchive <@channel | off>
 تنظیم کانال آرشیو؛ فورواردهای tag‌خورده به‌صورت خودکار به آن ارسال می‌شوند

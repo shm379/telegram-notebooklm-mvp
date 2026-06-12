@@ -1,5 +1,19 @@
 # Changelog
 
+## Collections / notebooks (2026-06-12)
+
+گروه‌بندی چند تگ زیر یک «دفترچه» (collection).
+
+### Behaviour
+- `/collection new <name>` (نام تک‌کلمه)، `/collection add <name> <tag>`، `/collection list`، `/collection remove <name>`، و `/collection show <name>` که آیتم‌های دارای هر کدام از تگ‌های مجموعه را (به‌صورت distinct، جدیدترین اول) نشان می‌دهد. همه scoped به owner.
+
+### Components
+- جداول `collections` و `collection_tags` (با index یکتای `(owner_id, name)`).
+- متدهای repository: `create_collection`، `add_collection_tag`، `list_collections`، `collection_tags`، `remove_collection`، و `items_for_tags(owner_id, tags, limit)` (اجتماع distinct).
+
+### Tests
+- `tests/test_collections.py`: CRUD و افزودن تگ، ایزولاسیون per-user، `items_for_tags` (اجتماع/distinct/scoping)، و مسیرهای کامل هندلر (new/add/list/show/remove + خطاها).
+
 ## Dashboard Library panel (2026-06-12)
 
 - داشبورد وب یک کارت «Library» گرفت که با دکمه، `/api/stats` و `/api/recent` را فراخوانی و خلاصه‌ی آرشیو (تعداد آیتم/منبع/تگ و نوع مدیا) و آخرین آیتم‌ها را نمایش می‌دهد.
