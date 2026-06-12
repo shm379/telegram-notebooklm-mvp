@@ -613,6 +613,35 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 conn.execute("DELETE FROM content_tags WHERE owner_id = ?", (owner_id,))
                 conn.commit()
 
+    def rename_tag(self, *, owner_id: int, old_tag: str, new_tag: str) -> int:
+        """Rename (or merge into an existing) tag across the owner's content. Returns rows moved.
+
+        Items already carrying ``new_tag`` collapse cleanly (INSERT OR IGNORE then DELETE),
+        so renaming onto an existing tag merges the two.
+        """
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                affected = conn.execute(
+                    "SELECT COUNT(*) FROM content_tags WHERE owner_id = ? AND tag = ?", (owner_id, old_tag)
+                ).fetchone()[0]
+                if affected:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO content_tags (owner_id, media_item_id, tag) "
+                        "SELECT owner_id, media_item_id, ? FROM content_tags WHERE owner_id = ? AND tag = ?",
+                        (new_tag, owner_id, old_tag),
+                    )
+                    conn.execute("DELETE FROM content_tags WHERE owner_id = ? AND tag = ?", (owner_id, old_tag))
+                    conn.commit()
+                return affected
+
+    def delete_tag(self, *, owner_id: int, tag: str) -> int:
+        """Remove a tag from all of the owner's content. Returns rows removed."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                cur = conn.execute("DELETE FROM content_tags WHERE owner_id = ? AND tag = ?", (owner_id, tag))
+                conn.commit()
+                return cur.rowcount
+
     def media_texts(self, *, owner_id: int) -> list[dict[str, Any]]:
         """Every stored media item for the owner with its transcript/text, for re-tagging."""
         with self.lock:

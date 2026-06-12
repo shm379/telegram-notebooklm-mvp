@@ -1,5 +1,18 @@
 # Changelog
 
+## Tag management (2026-06-12)
+
+مدیریت دستی تگ‌ها (rename / merge / delete).
+
+### Behaviour
+- `/tag rename <old> -> <new>` نام تگ را عوض می‌کند؛ اگر `<new>` از قبل وجود داشته باشد، دو تگ ادغام می‌شوند (بدون خطای کلید تکراری). `/tag delete <tag>` تگ را از همه‌ی آیتم‌ها برمی‌دارد. هر دو scoped به owner.
+
+### Components
+- `Repository.rename_tag` (INSERT OR IGNORE سپس DELETE برای ادغام امن) و `Repository.delete_tag`.
+
+### Tests
+- `tests/test_tag_management.py`: rename، merge در تگ موجود، delete، ایزولاسیون per-user، و مسیرهای هندلر (rename/delete/usage/missing).
+
 ## Recent digest (2026-06-12)
 
 «بهم بگو چی از دست دادم» — خلاصه‌ی AI از محتوای اخیر.
