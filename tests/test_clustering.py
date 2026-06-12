@@ -1,7 +1,60 @@
 import json
 
-from telegram_notebook.clustering import build_topics, cluster_embeddings, top_terms
+from telegram_notebook.clustering import (
+    build_label_prompt,
+    build_topics,
+    cluster_embeddings,
+    label_cluster,
+    parse_topic_label,
+    top_terms,
+)
 from telegram_notebook.db import Repository
+
+
+def test_build_label_prompt_includes_and_truncates_snippets():
+    prompt = build_label_prompt(["x" * 500, "second snippet", ""], max_items=6, max_chars=100)
+    assert "x" * 100 in prompt and "x" * 101 not in prompt
+    assert "second snippet" in prompt
+    assert prompt.rstrip().endswith("Label:")
+
+
+def test_parse_topic_label_cleans_reply():
+    assert parse_topic_label('"Real Estate"') == "Real Estate"
+    assert parse_topic_label("\n\n  Video AI Tools \n more") == "Video AI Tools"
+    assert parse_topic_label("") == ""
+    assert parse_topic_label(None) == ""
+
+
+def test_label_cluster_uses_injected_generate():
+    calls = []
+
+    def fake_generate(prompt: str) -> str:
+        calls.append(prompt)
+        return "AI Video Tools"
+
+    assert label_cluster(["a snippet about ai video"], generate=fake_generate) == "AI Video Tools"
+    assert len(calls) == 1
+
+
+def test_build_topics_namer_labels_and_falls_back():
+    items = [
+        {"embedding": [1.0, 0.0], "text": "villa marina villa"},
+        {"embedding": [0.97, 0.03], "text": "villa pool"},
+    ]
+    # namer provides the label
+    topics = build_topics(items, threshold=0.8, namer=lambda texts: "Luxury Real Estate")
+    assert topics[0]["label"] == "Luxury Real Estate"
+
+    # namer raising -> fall back to keyword-frequency label
+    def boom(texts):
+        raise RuntimeError("llm down")
+
+    topics = build_topics(items, threshold=0.8, namer=boom)
+    assert "villa" in topics[0]["label"]
+
+    # namer returning empty -> fall back too
+    topics = build_topics(items, threshold=0.8, namer=lambda texts: "  ")
+    assert "villa" in topics[0]["label"]
 
 
 def test_top_terms_skips_stopwords_and_short_tokens():

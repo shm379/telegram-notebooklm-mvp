@@ -19,11 +19,12 @@ import os
 import sys
 from typing import Any
 
-from .clustering import build_topics
+from .clustering import build_topics, label_cluster
 from .config import get_settings
 from .db import Repository, connect
 from .embeddings import EmbeddingService
 from .logging_config import setup_logging
+from .provider_http import gemini_generate_content
 from .search import SearchService
 from .timeline import build_timeline
 
@@ -199,7 +200,19 @@ class McpServer:
         )
         if not items:
             return "No embedded content to cluster yet."
-        topics = build_topics(items)
+        namer = None
+        if self.settings.gemini_api_key:
+            def namer(texts: list[str]) -> str:
+                return label_cluster(
+                    texts,
+                    generate=lambda prompt: gemini_generate_content(
+                        api_key=self.settings.gemini_api_key,
+                        prompt=prompt,
+                        project_id=self.settings.vertex_project_id,
+                        region=self.settings.vertex_region or "us-central1",
+                    ),
+                )
+        topics = build_topics(items, namer=namer)
         return "\n".join(f"- {t['label']} ({t['size']})" for t in topics)
 
     def _tool_timeline(self, args: dict) -> str:

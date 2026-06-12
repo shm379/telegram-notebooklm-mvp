@@ -1,5 +1,19 @@
 # Changelog
 
+## LLM topic labels (2026-06-12)
+
+نام‌گذاری خوشه‌های `/topics` با LLM (در صورت وجود کلید Gemini).
+
+### Behaviour
+- `/topics` و ابزار MCP `list_topics` حالا برچسب هر خوشه را با یک فراخوانی LLM (Gemini) از روی نمونه‌متن‌های خوشه می‌سازند؛ در نبود کلید یا خطا/پاسخ خالی، به برچسب مبتنی بر پرتکرارترین واژه‌ها (`top_terms`) برمی‌گردند. خروجی ربات HTML-escape می‌شود.
+
+### Design
+- در `clustering.py`: توابع خالص `build_label_prompt` و `parse_topic_label` و `label_cluster(texts, *, generate)` با فراخوانی LLM تزریق‌شده؛ `build_topics` پارامتر اختیاری `namer` گرفت که per-cluster برچسب می‌سازد و با خطا/خالی fallback می‌کند.
+- در `bot.py` و `mcp_server.py` فقط وقتی کلید Gemini باشد namer ساخته می‌شود.
+
+### Tests
+- `tests/test_clustering.py`: ساخت/پارس prompt برچسب، `label_cluster` با generate تزریق‌شده، و `build_topics` با namer (برچسب‌گذاری، و fallback روی خطا/خالی).
+
 ## Forwarded media processing (2026-06-12)
 
 تکمیل Forwarded Inbox: مدیای فورواردشده دانلود و به متن قابل‌جستجو تبدیل می‌شود.

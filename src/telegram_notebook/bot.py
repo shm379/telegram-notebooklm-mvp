@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .bot_api import TelegramBotApi
-from .clustering import build_topics
+from .clustering import build_topics, label_cluster
 from .config import Settings, get_settings
 from .db import Repository, connect
 from .embeddings import EmbeddingService
@@ -972,14 +972,34 @@ class NotebookBot:
                 "No embedded content to cluster yet. Topics need embeddings — ingest with an embedding API key configured.",
             )
             return
-        topics = build_topics(items)
+        topics = build_topics(items, namer=self._topic_namer(bot_user_id))
         scope = tag or source or "your archive"
-        lines = [f"<b>Topics — {scope}</b> ({len(topics)} cluster(s) from {len(items)} chunks)"]
+        lines = [f"<b>Topics — {html.escape(scope)}</b> ({len(topics)} cluster(s) from {len(items)} chunks)"]
         for topic in topics[:15]:
-            lines.append(f"\n• <b>{topic['label']}</b> ({topic['size']})")
+            lines.append(f"\n• <b>{html.escape(topic['label'])}</b> ({topic['size']})")
             if topic["sample"]:
-                lines.append(f"  {topic['sample']}")
+                lines.append(f"  {html.escape(topic['sample'])}")
         self.services.api.send_message(chat_id, "\n".join(lines))
+
+    def _topic_namer(self, bot_user_id: int):
+        """Return an LLM cluster-labeller when a Gemini key is available, else None."""
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
+        if not api_key:
+            return None
+
+        def namer(texts: list[str]) -> str:
+            return label_cluster(
+                texts,
+                generate=lambda prompt: gemini_generate_content(
+                    api_key=api_key,
+                    prompt=prompt,
+                    project_id=self.services.settings.vertex_project_id,
+                    region=self.services.settings.vertex_region or "us-central1",
+                ),
+            )
+
+        return namer
 
     def _handle_timeline(self, chat_id: int, bot_user_id: int, args: str) -> None:
         granularity = "day" if "--day" in args.split() else "month"
