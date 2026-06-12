@@ -23,6 +23,7 @@ from .jobs import JobWorker
 from .logging_config import setup_logging
 from .pipeline import IngestionPipeline
 from .provider_http import gemini_generate_content
+from .recent import recent_rows
 from .rules import classify_ai_tags, match_tags
 from .search import SearchService
 from .stats import format_stats
@@ -299,6 +300,8 @@ class NotebookBot:
             self._handle_jobs(chat_id, bot_user_id)
         elif command == "/canceljob":
             self._handle_cancel_job(chat_id, bot_user_id, text.removeprefix("/canceljob").strip())
+        elif command == "/recent":
+            self._handle_recent(chat_id, bot_user_id, text.removeprefix("/recent").strip())
         elif command == "/sources":
             self._handle_sources(chat_id, bot_user_id)
         elif command == "/delete":
@@ -357,6 +360,7 @@ class NotebookBot:
             "/topics [--source &lt;url&gt;] [--tag &lt;tag&gt;] — cluster your content into topics\n"
             "/timeline [--source &lt;url&gt;] [--tag &lt;tag&gt;] [--day] — browse your archive by date\n"
             "/export [--source &lt;url&gt;] [--tag &lt;tag&gt;] — download a Markdown export\n"
+            "/recent [n] — list your latest items\n"
             "/stats — an overview of your archive\n"
             "/sources — list indexed sources\n"
             "/delete &lt;channel_url&gt; — delete a source's data\n"
@@ -1020,6 +1024,30 @@ class NotebookBot:
             self.services.api.send_message(chat_id, "Sorry, I couldn't build the digest right now. Please try again later.")
             return
         self.services.api.send_message(chat_id, f"<b>Digest — {scope_label}</b>\n\n{answer}")
+
+    def _handle_recent(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        n = 10
+        tokens = args.split()
+        if tokens:
+            try:
+                n = max(1, min(50, int(tokens[0])))
+            except ValueError:
+                pass
+        items = self.services.repository.timeline_items(owner_id=bot_user_id, limit=n)
+        if not items:
+            self.services.api.send_message(chat_id, "No content yet. Ingest a channel or forward messages first.")
+            return
+        lines = [f"<b>Recent ({len(items)})</b>"]
+        for row in recent_rows(items, limit=n):
+            head = f"\n• <b>{html.escape(row['source'])}</b>"
+            if row["date"]:
+                head += f" · {row['date']}"
+            lines.append(head)
+            if row["snippet"]:
+                lines.append(f"  {html.escape(row['snippet'])}")
+            if row["url"]:
+                lines.append(f"  {html.escape(row['url'])}")
+        self.services.api.send_message(chat_id, "\n".join(lines))
 
     def _handle_topics(self, chat_id: int, bot_user_id: int, args: str) -> None:
         _, source, tag = self._split_filters(args)

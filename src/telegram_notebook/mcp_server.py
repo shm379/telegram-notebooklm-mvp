@@ -25,6 +25,7 @@ from .db import Repository, connect
 from .embeddings import EmbeddingService
 from .logging_config import setup_logging
 from .provider_http import gemini_generate_content
+from .recent import recent_rows
 from .search import SearchService
 from .stats import format_stats
 from .timeline import build_timeline
@@ -127,6 +128,14 @@ class McpServer:
                 "inputSchema": {"type": "object", "properties": {}},
                 "handler": self._tool_archive_stats,
             },
+            "list_recent": {
+                "description": "List the most recently archived items (newest first).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer", "description": "Max items (default 10)."}},
+                },
+                "handler": self._tool_list_recent,
+            },
         }
 
     # --- tool handlers (return plain text) ---
@@ -223,6 +232,24 @@ class McpServer:
 
     def _tool_archive_stats(self, args: dict) -> str:
         return format_stats(self.repository.archive_stats(owner_id=self.owner_id))
+
+    def _tool_list_recent(self, args: dict) -> str:
+        limit = max(1, min(50, int(args.get("limit") or 10)))
+        items = self.repository.timeline_items(owner_id=self.owner_id, limit=limit)
+        if not items:
+            return "No content yet."
+        rows = recent_rows(items, limit=limit)
+        lines = []
+        for r in rows:
+            head = f"- ({r['source']})"
+            if r["date"]:
+                head += f" {r['date']}"
+            if r["snippet"]:
+                head += f": {r['snippet']}"
+            if r["url"]:
+                head += f"\n  {r['url']}"
+            lines.append(head)
+        return "\n".join(lines)
 
     def _tool_timeline(self, args: dict) -> str:
         items = self.repository.timeline_items(
