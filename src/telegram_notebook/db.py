@@ -203,6 +203,7 @@ class Repository:
                 """)
                 self._ensure_channel_owner(conn)
                 self._ensure_bot_user_columns(conn)
+                self._ensure_rule_columns(conn)
                 conn.commit()
 
     @staticmethod
@@ -211,6 +212,13 @@ class Repository:
         cols = [row[1] for row in conn.execute("PRAGMA table_info(bot_users)").fetchall()]
         if "archive_chat_id" not in cols:
             conn.execute("ALTER TABLE bot_users ADD COLUMN archive_chat_id TEXT")
+
+    @staticmethod
+    def _ensure_rule_columns(conn: sqlite3.Connection) -> None:
+        """Add the rule ``kind`` column (keyword vs ai) to older databases (idempotent)."""
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(rules)").fetchall()]
+        if "kind" not in cols:
+            conn.execute("ALTER TABLE rules ADD COLUMN kind TEXT DEFAULT 'keyword'")
 
     @staticmethod
     def _ensure_channel_owner(conn: sqlite3.Connection) -> None:
@@ -531,12 +539,12 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
 
     # --- Rules & tags ------------------------------------------------------
 
-    def add_rule(self, *, owner_id: int, keyword: str, tag: str, created_at: str | None = None) -> int:
+    def add_rule(self, *, owner_id: int, keyword: str, tag: str, kind: str = "keyword", created_at: str | None = None) -> int:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.execute(
-                    "INSERT OR IGNORE INTO rules (owner_id, keyword, tag, created_at) VALUES (?, ?, ?, ?)",
-                    (owner_id, keyword, tag, created_at),
+                    "INSERT OR IGNORE INTO rules (owner_id, keyword, tag, kind, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (owner_id, keyword, tag, kind, created_at),
                 )
                 conn.commit()
                 res = conn.execute(
@@ -550,7 +558,8 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
                 return [dict(r) for r in conn.execute(
-                    "SELECT id, keyword, tag FROM rules WHERE owner_id = ? ORDER BY id", (owner_id,)
+                    "SELECT id, keyword, tag, COALESCE(kind, 'keyword') AS kind FROM rules WHERE owner_id = ? ORDER BY id",
+                    (owner_id,),
                 ).fetchall()]
 
     def remove_rule(self, *, owner_id: int, rule_id: int) -> bool:

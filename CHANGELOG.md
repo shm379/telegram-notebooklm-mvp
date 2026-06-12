@@ -1,5 +1,24 @@
 # Changelog
 
+## AI-based rules (2026-06-12)
+
+قوانین tag مبتنی بر LLM، در کنار قوانین keyword موجود.
+
+### Behaviour
+- `/rule add-ai <criterion> -> <tag>` یک قانون با معیار زبان طبیعی تعریف می‌کند؛ `/rule list` نوع هر قانون را با آیکن (📝 keyword / 🤖 ai) نشان می‌دهد.
+- قوانین AI فقط هنگام `/rule apply` ارزیابی می‌شوند (یک فراخوانی LLM به‌ازای هر آیتم، پوشش همه‌ی قوانین AI). در نبود کلید Gemini نادیده گرفته می‌شوند و در خروجی اطلاع داده می‌شود. قوانین keyword مثل قبل روی هر ingest اعمال می‌شوند.
+- `match_tags` حالا قوانین AI را در مسیرهای خودکار رد می‌کند.
+
+### Design
+- ماژول `rules.py` با توابع خالص `build_classify_prompt` و `parse_classified_tags` و `classify_ai_tags(text, ai_rules, *, generate)` که فراخوانی LLM را inject می‌کند تا کاملاً offline-testable بماند.
+- ستون `kind` روی جدول `rules` با مهاجرت idempotent `_ensure_rule_columns`؛ `add_rule`/`list_rules` با پشتیبانی از `kind`.
+
+### Outside scope (follow-up)
+- اعمال خودکار قوانین AI روی هر ingest (فعلاً فقط `/rule apply`).
+
+### Tests
+- `tests/test_ai_rules.py`: رد قوانین AI در `match_tags`، ساخت/پارس prompt، `classify_ai_tags` با generate تزریق‌شده و short-circuit، ذخیره‌ی `kind`، و `/rule apply` با ترکیب keyword+AI (LLM جعلی) و رد AI بدون کلید.
+
 ## Timeline (2026-06-11)
 
 نمای زمانی آرشیو — مکمل زمانیِ topic clustering.
