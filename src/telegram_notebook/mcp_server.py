@@ -26,6 +26,7 @@ from .embeddings import EmbeddingService
 from .logging_config import setup_logging
 from .provider_http import gemini_generate_content
 from .search import SearchService
+from .stats import format_stats
 from .timeline import build_timeline
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,11 @@ class McpServer:
                 },
                 "handler": self._tool_timeline,
             },
+            "archive_stats": {
+                "description": "Overview counts for the archive: items, sources, tags, types, and date range.",
+                "inputSchema": {"type": "object", "properties": {}},
+                "handler": self._tool_archive_stats,
+            },
         }
 
     # --- tool handlers (return plain text) ---
@@ -214,6 +220,9 @@ class McpServer:
                 )
         topics = build_topics(items, namer=namer)
         return "\n".join(f"- {t['label']} ({t['size']})" for t in topics)
+
+    def _tool_archive_stats(self, args: dict) -> str:
+        return format_stats(self.repository.archive_stats(owner_id=self.owner_id))
 
     def _tool_timeline(self, args: dict) -> str:
         items = self.repository.timeline_items(

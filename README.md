@@ -68,6 +68,7 @@
 - **Topic clustering**: `/topics` محتوای آرشیو را به‌صورت آفلاین (روی embeddingهای موجود) خوشه‌بندی موضوعی می‌کند؛ در صورت وجود کلید Gemini، برچسب هر خوشه با LLM ساخته می‌شود (وگرنه از پرتکرارترین واژه‌ها)
 - **Timeline**: `/timeline` آرشیو را بر اساس تاریخ (ماه یا روز) گروه‌بندی می‌کند — مکمل زمانیِ `/topics`
 - **Export**: `/export` کل آرشیو، یک منبع یا یک تگ را به‌صورت یک فایل Markdown قابل‌دانلود خروجی می‌گیرد
+- **Stats**: `/stats` نمای کلی آرشیو (تعداد آیتم‌ها، منابع، تگ‌ها، نوع مدیا، و بازه‌ی زمانی) را نشان می‌دهد
 - **MCP Server (read-only)**: expose کردن آرشیو به ابزارهای AI با JSON-RPC روی stdio (`python -m telegram_notebook.mcp_server`)
 
 ---
@@ -174,6 +175,9 @@ Python Backend
 
 /export [--source <url>] [--tag <tag>]
 دانلود خروجی Markdown از کل آرشیو، یک منبع، یا یک تگ
+
+/stats
+نمای کلی آرشیو (تعداد آیتم‌ها، منابع، تگ‌ها، نوع مدیا، بازه‌ی زمانی)
 
 /sources
 نمایش منابع ایندکس‌شده
@@ -320,6 +324,7 @@ ask_telegram_notebook     پرسش و پاسخ RAG از روی آرشیو
 summarize_source          خلاصه‌سازی کل آرشیو، یک منبع، یا یک تگ
 list_topics               خوشه‌بندی موضوعی محتوا (آفلاین، از embeddingها)
 timeline                  شمارش آیتم‌ها بر اساس بازه‌ی زمانی (ماه/روز)
+archive_stats             نمای کلی آرشیو (تعداد، نوع مدیا، بازه‌ی زمانی)
 ```
 
 همه‌ی ابزارها read-only هستند؛ ابزارهای حساس (import، forward، delete، create_rule) عمداً expose نشده‌اند و در صورت نیاز باید بعداً با permission و confirmation اضافه شوند.

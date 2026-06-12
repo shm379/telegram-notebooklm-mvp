@@ -25,6 +25,7 @@ from .pipeline import IngestionPipeline
 from .provider_http import gemini_generate_content
 from .rules import classify_ai_tags, match_tags
 from .search import SearchService
+from .stats import format_stats
 from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
 from .timeline import build_timeline
 from .transcription import TranscriptionService
@@ -300,6 +301,8 @@ class NotebookBot:
             self._handle_delete(chat_id, bot_user_id, text.removeprefix("/delete").strip())
         elif command == "/export":
             self._handle_export(chat_id, bot_user_id, text.removeprefix("/export").strip())
+        elif command == "/stats":
+            self._handle_stats(chat_id, bot_user_id)
         else:
             self.services.api.send_message(chat_id=chat_id, text="Unknown command. Send /help to see what I can do.")
 
@@ -349,6 +352,7 @@ class NotebookBot:
             "/topics [--source &lt;url&gt;] [--tag &lt;tag&gt;] — cluster your content into topics\n"
             "/timeline [--source &lt;url&gt;] [--tag &lt;tag&gt;] [--day] — browse your archive by date\n"
             "/export [--source &lt;url&gt;] [--tag &lt;tag&gt;] — download a Markdown export\n"
+            "/stats — an overview of your archive\n"
             "/sources — list indexed sources\n"
             "/delete &lt;channel_url&gt; — delete a source's data\n"
             "/cancel — cancel the current flow\n\n"
@@ -1044,6 +1048,10 @@ class NotebookBot:
             self.services.api.send_message(chat_id, "Sorry, I couldn't send the export right now. Please try again later.")
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def _handle_stats(self, chat_id: int, bot_user_id: int) -> None:
+        stats = self.services.repository.archive_stats(owner_id=bot_user_id)
+        self.services.api.send_message(chat_id, f"<b>Archive stats</b>\n{html.escape(format_stats(stats))}")
 
     def _handle_tags(self, chat_id: int, bot_user_id: int) -> None:
         tags = self.services.repository.list_tags(owner_id=bot_user_id)
