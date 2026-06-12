@@ -25,6 +25,7 @@ from .db import Repository, connect
 from .embeddings import EmbeddingService
 from .logging_config import setup_logging
 from .search import SearchService
+from .timeline import build_timeline
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,18 @@ class McpServer:
                 },
                 "handler": self._tool_list_topics,
             },
+            "timeline": {
+                "description": "Show how many items were archived per calendar period (by month, or by day).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string"},
+                        "tag": {"type": "string"},
+                        "granularity": {"type": "string", "description": "'month' (default) or 'day'."},
+                    },
+                },
+                "handler": self._tool_timeline,
+            },
         }
 
     # --- tool handlers (return plain text) ---
@@ -188,6 +201,16 @@ class McpServer:
             return "No embedded content to cluster yet."
         topics = build_topics(items)
         return "\n".join(f"- {t['label']} ({t['size']})" for t in topics)
+
+    def _tool_timeline(self, args: dict) -> str:
+        items = self.repository.timeline_items(
+            owner_id=self.owner_id, channel_url=args.get("source") or None, tag=args.get("tag") or None
+        )
+        if not items:
+            return "No dated content yet."
+        granularity = "day" if str(args.get("granularity")).lower() == "day" else "month"
+        periods = build_timeline(items, granularity=granularity)
+        return "\n".join(f"- {p['period']}: {p['count']}" for p in periods)
 
     def _tool_summarize(self, args: dict) -> str:
         source = args.get("source") or None

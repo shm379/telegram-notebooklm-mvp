@@ -662,6 +662,30 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 params.append(limit)
                 return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
+    def timeline_items(self, *, owner_id: int, channel_url: str | None = None, tag: str | None = None, limit: int = 2000) -> list[dict[str, Any]]:
+        """Dated content items (date + text + source), newest first, for the timeline view.
+        Optionally scoped to a single source (``channel_url``) and/or ``tag``."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                sql = """
+                    SELECT m.message_date, mi.transcript_text AS text, ch.channel_title, ch.channel_url, m.message_url
+                    FROM media_items mi
+                    JOIN messages m ON mi.message_id = m.id
+                    JOIN channels ch ON m.channel_id = ch.id
+                    WHERE ch.owner_id = ? AND m.message_date IS NOT NULL AND m.message_date != ''
+                """
+                params: list[Any] = [owner_id]
+                if channel_url:
+                    sql += " AND ch.channel_url = ?"
+                    params.append(channel_url)
+                if tag:
+                    sql += " AND mi.id IN (SELECT media_item_id FROM content_tags WHERE owner_id = ? AND tag = ?)"
+                    params.extend([owner_id, tag])
+                sql += " ORDER BY m.message_date DESC LIMIT ?"
+                params.append(limit)
+                return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
     def chunks_with_embeddings(self, *, owner_id: int, channel_url: str | None = None, tag: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
         """Chunks that have a stored embedding (with source), for offline topic clustering."""
         with self.lock:
