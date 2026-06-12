@@ -219,6 +219,7 @@ Python Backend
 
 /collection new|add|list|remove|show <name>
 گروه‌بندی چند تگ زیر یک «دفترچه» و نمایش آیتم‌های آن
+(سپس می‌توانید با /summarize --collection <name> یا /export --collection <name> کل دفترچه را خلاصه/خروجی بگیرید)
 
 /setarchive <@channel | off>
 تنظیم کانال آرشیو؛ فورواردهای tag‌خورده به‌صورت خودکار به آن ارسال می‌شوند

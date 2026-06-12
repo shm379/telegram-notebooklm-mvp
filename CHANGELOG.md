@@ -1,5 +1,18 @@
 # Changelog
 
+## Query collections (2026-06-12)
+
+تکمیل Collections: حالا یک دفترچه قابل خلاصه/خروجی‌گرفتن است.
+
+### Behaviour
+- `/summarize --collection <name>` و `/export --collection <name>` همه‌ی آیتم‌های دارای هر یک از تگ‌های مجموعه را (از `items_for_tags`) خلاصه یا به Markdown خروجی می‌گیرند. اگر مجموعه وجود نداشته باشد پیام مناسب می‌دهد.
+
+### Components
+- helper خالص `NotebookBot._extract_collection(args)` (جداکردن فلگ `--collection <name>`) و `_collection_items` (resolve مجموعه به items + scope label).
+
+### Tests
+- `tests/test_collections.py`: `_extract_collection`، `/summarize --collection` (اجتماع تگ‌ها و مجموعه‌ی ناموجود)، و `/export --collection` (محتوای درست سند).
+
 ## Collections / notebooks (2026-06-12)
 
 گروه‌بندی چند تگ زیر یک «دفترچه» (collection).

@@ -113,3 +113,70 @@ def test_handle_collection_errors(tmp_path):
     assert "No collections yet" in api.messages[-1][1]
     p._handle_collection(10, 1, "new")
     assert "Usage" in api.messages[-1][1]
+
+
+def test_extract_collection():
+    assert NotebookBot._extract_collection("--collection Work") == ("Work", "")
+    assert NotebookBot._extract_collection("foo --collection Work bar") == ("Work", "foo bar")
+    assert NotebookBot._extract_collection("no flag here") == (None, "no flag here")
+    assert NotebookBot._extract_collection("--collection") == (None, "")  # missing name
+
+
+def test_summarize_by_collection(tmp_path, monkeypatch):
+    repo = Repository(tmp_path / "store.db")
+    repo.init()
+    _item(repo, 1, "alpha note", ["AI"])
+    _item(repo, 1, "beta note", ["Finance"])
+    _item(repo, 1, "gamma note", ["Other"])
+    repo.create_collection(owner_id=1, name="Work")
+    repo.add_collection_tag(owner_id=1, name="Work", tag="AI")
+    repo.add_collection_tag(owner_id=1, name="Work", tag="Finance")
+
+    p, api = _probe(repo)
+    p.services.settings = SimpleNamespace(gemini_api_key="key", vertex_project_id=None, vertex_region="us-central1")
+
+    captured = {}
+
+    class FakeSearch:
+        def summarize(self, *, scope_label, items, api_key, project_id, region):
+            captured["scope"] = scope_label
+            captured["texts"] = sorted(i["text"] for i in items)
+            return "the summary"
+
+    monkeypatch.setattr(p, "_search_service_for_user", lambda user: FakeSearch())
+    monkeypatch.setattr(p, "_vertex_search_config", lambda user: None)
+
+    p._handle_summarize(10, 1, "--collection Work")
+    assert captured["texts"] == ["alpha note", "beta note"]  # union of the collection's tags
+    assert "Work" in captured["scope"]
+    assert "the summary" in api.messages[-1][1]
+
+    p._handle_summarize(10, 1, "--collection Ghost")
+    assert "not found" in api.messages[-1][1]
+
+
+def test_export_by_collection(tmp_path):
+    from pathlib import Path
+
+    repo = Repository(tmp_path / "store.db")
+    repo.init()
+    _item(repo, 1, "alpha note", ["AI"])
+    _item(repo, 1, "skip me", ["Other"])
+    repo.create_collection(owner_id=1, name="Work")
+    repo.add_collection_tag(owner_id=1, name="Work", tag="AI")
+
+    sent = []
+
+    class DocApi:
+        def send_message(self, chat_id=None, text=None, **kwargs):
+            sent.append(("msg", text))
+
+        def send_document(self, *, chat_id, document_path, caption=None):
+            sent.append(("doc", Path(document_path).read_text(encoding="utf-8"), caption))
+
+    p = _Probe()
+    p.services = SimpleNamespace(repository=repo, api=DocApi())
+    p._handle_export(10, 1, "--collection Work")
+    doc = next(s for s in sent if s[0] == "doc")
+    assert "alpha note" in doc[1] and "skip me" not in doc[1]
+    assert "Work" in doc[2]
