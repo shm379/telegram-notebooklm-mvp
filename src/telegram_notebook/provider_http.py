@@ -302,6 +302,69 @@ def gemini_transcribe_audio(
     return "".join(full_text).strip()
 
 
+_EXTRACT_PROMPT = (
+    "Extract all readable text from this file (a document, scan, or photo). "
+    "For images, perform OCR. Return only the extracted text, preserving order. "
+    "If there is no readable text, return an empty response."
+)
+
+
+def gemini_extract_document(
+    *,
+    api_key: str | None = None,
+    model: str,
+    file_path: Path,
+    project_id: str | None = None,
+    region: str = "us-central1",
+) -> str:
+    """OCR / text extraction for an image or PDF via Gemini multimodal."""
+    if "flash" not in model:
+        model = "gemini-2.5-flash-lite"
+    mime_type = guess_mime_type(file_path) or "application/octet-stream"
+
+    if api_key:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model,
+            contents=[
+                _EXTRACT_PROMPT,
+                types.Part.from_bytes(data=file_path.read_bytes(), mime_type=mime_type),
+            ],
+            config=types.GenerateContentConfig(temperature=0.0),
+        )
+        text = getattr(response, "text", None)
+        return text.strip() if text else ""
+
+    encoded = base64.b64encode(file_path.read_bytes()).decode("ascii")
+    url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:streamGenerateContent"
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": _EXTRACT_PROMPT},
+                    {"inlineData": {"mimeType": mime_type, "data": encoded}},
+                ],
+            }
+        ]
+    }
+    data = _json_request(url=url, payload=payload, use_gcloud_auth=True)
+    full_text = []
+    chunks = data if isinstance(data, list) else [data]
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        candidates = chunk.get("candidates", [])
+        if candidates:
+            for p in candidates[0].get("content", {}).get("parts", []):
+                if "text" in p:
+                    full_text.append(p["text"])
+    return "".join(full_text).strip()
+
+
 def gemini_generate_content(
     *,
     api_key: str | None = None,

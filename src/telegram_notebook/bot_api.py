@@ -11,6 +11,7 @@ import certifi
 class TelegramBotApi:
     def __init__(self, token: str) -> None:
         self.base_url = f"https://api.telegram.org/bot{token}"
+        self.file_base_url = f"https://api.telegram.org/file/bot{token}"
         self.ssl_context = ssl.create_default_context(cafile=certifi.where())
 
     def call(self, method: str, payload: dict[str, object] | None = None, files: dict | None = None) -> dict[str, object]:
@@ -76,6 +77,18 @@ class TelegramBotApi:
         
         with open(photo_path, "rb") as f:
             self.call("sendPhoto", payload=payload, files={"photo": f})
+
+    def get_file(self, file_id: str) -> dict[str, object]:
+        """Resolve a file_id to its metadata (including ``file_path``) via getFile."""
+        return dict(self.call("getFile", {"file_id": file_id}).get("result", {}))
+
+    def download_file(self, file_path: str, dest: Path) -> Path:
+        """Download a Bot API file (``file_path`` from getFile) to ``dest``."""
+        url = f"{self.file_base_url}/{file_path}"
+        req = request.Request(url)
+        with request.urlopen(req, timeout=120, context=self.ssl_context) as response:
+            dest.write_bytes(response.read())
+        return dest
 
     def answer_callback_query(self, callback_query_id: str) -> None:
         self.call("answerCallbackQuery", {"callback_query_id": callback_query_id})
