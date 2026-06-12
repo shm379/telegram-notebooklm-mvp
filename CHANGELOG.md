@@ -1,5 +1,18 @@
 # Changelog
 
+## Recent digest (2026-06-12)
+
+«بهم بگو چی از دست دادم» — خلاصه‌ی AI از محتوای اخیر.
+
+### Behaviour
+- `/digest [days]` (پیش‌فرض ۷، بازه‌ی ۱ تا ۹۰): محتوای ثبت‌شده در N روز اخیر را با همان موتور `summarize` خلاصه می‌کند. در نبود کلید Gemini، به یک خلاصه‌ی ساده (تعداد آیتم + منابع) برمی‌گردد؛ در نبود محتوای اخیر، پیام مناسب می‌دهد.
+
+### Components
+- `Repository.recent_items(owner_id, since_date, limit)` — آیتم‌های با `message_date >= since` (جدیدترین اول).
+
+### Tests
+- `tests/test_digest.py`: فیلتر تاریخ/owner در `recent_items`، و مسیرهای هندلر (بدون محتوا، fallback بدون کلید، و استفاده از summarize با کلید).
+
 ## Archive stats (2026-06-12)
 
 نمای کلی آرشیو با `/stats` و ابزار MCP `archive_stats`.

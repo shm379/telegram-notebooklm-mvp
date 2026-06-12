@@ -728,6 +728,25 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 params.append(limit)
                 return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
+    def recent_items(self, *, owner_id: int, since_date: str, limit: int = 200) -> list[dict[str, Any]]:
+        """Content items with ``message_date >= since_date`` (ISO), newest first, for digests."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT m.message_date, mi.transcript_text AS text, ch.channel_title, ch.channel_url, m.message_url
+                    FROM media_items mi
+                    JOIN messages m ON mi.message_id = m.id
+                    JOIN channels ch ON m.channel_id = ch.id
+                    WHERE ch.owner_id = ? AND mi.transcript_text IS NOT NULL AND mi.transcript_text != ''
+                      AND m.message_date IS NOT NULL AND m.message_date >= ?
+                    ORDER BY m.message_date DESC LIMIT ?
+                    """,
+                    (owner_id, since_date, limit),
+                ).fetchall()
+                return [dict(r) for r in rows]
+
     def chunks_with_embeddings(self, *, owner_id: int, channel_url: str | None = None, tag: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
         """Chunks that have a stored embedding (with source), for offline topic clustering."""
         with self.lock:
