@@ -1,0 +1,575 @@
+# Telegram NotebookLM MVP
+
+**Languages / زبان‌ها:** [English](README.md) · [فارسی](README.fa.md) · [العربية](README.ar.md) · [Español](README.es.md) · [简体中文](README.zh.md)
+
+یک MVP برای ساخت **آرشیو هوشمند تلگرام** است؛ پروژه‌ای که بتواند محتوای کانال‌ها، چت‌ها، فایل‌ها، ویدیوها و پیام‌های فورواردشده را جمع‌آوری کند، آن‌ها را به متن قابل جستجو تبدیل کند و در نهایت مثل یک **NotebookLM داخلی برای تلگرام** به سؤال‌های کاربر پاسخ دهد.
+
+هدف نهایی پروژه این است که کاربر بتواند محتوای تلگرام خود را به یک حافظه قابل جستجو و قابل اتصال به ابزارهای AI تبدیل کند؛ از داخل ربات تلگرام، داشبورد وب، و در آینده از طریق MCP برای اتصال به ابزارهایی مثل ChatGPT، Claude، Cursor، Codex-like agents و سایر AI clients.
+
+---
+
+## ایده اصلی
+
+این پروژه سه حالت اصلی را هدف می‌گیرد:
+
+### 1. Import Channel / Chat
+
+کاربر لینک یا آیدی یک کانال عمومی یا چتی که به آن دسترسی دارد را می‌دهد و سیستم پیام‌ها، کپشن‌ها و مدیاهای آن را دریافت می‌کند.
+
+نمونه:
+
+```text
+/ingest https://t.me/example_channel
+```
+
+### 2. Forwarded Inbox
+
+کاربر می‌تواند پیام، پست، فایل، عکس، ویدیو، PDF یا هر محتوایی را به ربات فوروارد کند. سیستم آن را ذخیره، پردازش، تگ‌گذاری و قابل جستجو می‌کند.
+
+این بخش قرار است شبیه یک **Smart Telegram Inbox** عمل کند.
+
+### 3. AI Notebook / RAG
+
+بعد از ذخیره و ایندکس شدن محتوا، کاربر می‌تواند از آرشیو خود سؤال بپرسد:
+
+```text
+/ask از بین پیام‌هایی که درباره Al Mouj ذخیره کردم، کدام‌ها درباره townhouse بودند؟
+```
+
+یا:
+
+```text
+/ask ابزارهای AI که در کانال‌ها درباره ساخت ویدیو معرفی شده‌اند را دسته‌بندی کن
+```
+
+پاسخ باید همراه با منبع، لینک پیام و متن‌های مرتبط باشد.
+
+---
+
+## وضعیت فعلی MVP
+
+در نسخه فعلی، پروژه این قابلیت‌ها را دارد:
+
+- دریافت لینک کانال تلگرام و خواندن پیام‌ها با `Telethon`
+- دانلود و پردازش پیام‌های متنی، صوتی و ویدیویی
+- استخراج صوت از ویدیو با `ffmpeg`
+- تبدیل صوت/ویدیو به متن با OpenAI یا Gemini
+- chunk کردن متن‌ها
+- ساخت embedding برای جستجوی معنایی
+- جستجوی keyword + semantic search
+- پاسخ‌سازی اولیه با RAG از روی نتایج جستجو
+- داشبورد وب سبک با `Python http.server`
+- ربات تلگرام برای orchestration و دستورات اصلی
+- اتصال اکانت واقعی تلگرام کاربر با session string از طریق Telethon
+- **Forwarded Inbox**: فوروارد هر پیام به ربات، متن/کپشن آن را در inbox شخصی و قابل‌جستجوی کاربر ذخیره می‌کند
+- **پردازش مدیای فورواردشده**: فایل صوتی/ویدیو/voice به‌صورت خودکار transcribe و عکس/PDF با OCR (Gemini) به متن قابل‌جستجو تبدیل می‌شوند. فایل‌های DOCX/XLSX هم به‌صورت محلی (بدون کلید API و بدون شبکه) استخراج می‌شوند
+- **Rule Engine + Tags**: تعریف قانون keyword→tag، تگ‌گذاری خودکار محتوای واردشده، و فیلتر `/search` و `/ask` با `--tag`
+- **قوانین AI**: `/rule add-ai` با معیار زبان طبیعی (تطبیق با LLM)، و `/airules` برای تگ‌گذاری خودکارِ opt-in روی فورواردهای جدید
+- **مدیریت تگ و مرور**: `/tag rename|delete`، `/recent` برای آخرین آیتم‌ها، و endpointهای وب `/api/{stats,recent,timeline}` + پنل Library در داشبورد
+- **Auto-forward به کانال آرشیو**: با `/setarchive`، هر پیامی که فوروارد می‌کنید و با یک قانون tag مطابقت دارد، به‌صورت خودکار به کانال آرشیو شما هم فوروارد می‌شود
+- **Import Jobs**: import کامل کانال در background با صف، progress tracking، resume بعد از قطع‌شدن، و امکان لغو
+- **خلاصه‌سازی (NotebookLM)**: `/summarize` برای ساخت خلاصه‌ی ساختارمند از کل آرشیو، یک منبع خاص، یا یک تگ
+- **Digest**: `/digest [days]` خلاصه‌ی AI از محتوای اخیر (پیش‌فرض ۷ روز) را می‌سازد
+- **Topic clustering**: `/topics` محتوای آرشیو را به‌صورت آفلاین (روی embeddingهای موجود) خوشه‌بندی موضوعی می‌کند؛ در صورت وجود کلید Gemini، برچسب هر خوشه با LLM ساخته می‌شود (وگرنه از پرتکرارترین واژه‌ها)
+- **Timeline**: `/timeline` آرشیو را بر اساس تاریخ (ماه یا روز) گروه‌بندی می‌کند — مکمل زمانیِ `/topics`
+- **Export**: `/export` کل آرشیو، یک منبع یا یک تگ را به‌صورت یک فایل Markdown قابل‌دانلود خروجی می‌گیرد
+- **Stats**: `/stats` نمای کلی آرشیو (تعداد آیتم‌ها، منابع، تگ‌ها، نوع مدیا، و بازه‌ی زمانی) را نشان می‌دهد
+- **Collections (Notebooks)**: `/collection` چند تگ را زیر یک نام گروه می‌کند و آیتم‌های مجموعه را نشان می‌دهد
+- **Import بکاپ تلگرام**: فایل *Machine-readable JSON* تلگرام دسکتاپ (`result.json` یا یک `.zip` از پوشه‌ی export) را — هم تک‌چت و هم export کامل اکانت — می‌گیرد، همه‌ی پیام‌ها را قابل‌جستجو می‌کند و یک نسخه‌ی **Markdown** برمی‌گرداند. در ربات کافی است فایل را بفرستید؛ در وب از کارت «Import Telegram Backup» آپلود کنید.
+- **سایت لندینگ + وب‌اپ**: صفحه‌ی معرفی روی `/` و داشبورد کامل (Ingest / Search / Ask / Library / Import بکاپ) روی `/app`
+- **MCP Server (read-only)**: expose کردن آرشیو به ابزارهای AI با JSON-RPC روی stdio (`python -m telegram_notebook.mcp_server`)
+
+---
+
+## چرا Bot API کافی نیست؟
+
+برای گرفتن آرشیو کامل یک کانال یا چت، Bot API به‌تنهایی کافی نیست. Bot API معمولاً فقط پیام‌های جدیدی را می‌بیند که ربات به آن‌ها دسترسی دارد.
+
+برای import کردن تاریخچه کانال‌ها و چت‌ها، این پروژه از `Telethon` و MTProto استفاده می‌کند؛ یعنی همان سطح دسترسی user account، نه فقط bot token.
+
+---
+
+## معماری فعلی
+
+```text
+Telegram Bot
+  |
+  | دستورات کاربر: /connect, /ingest, /search, /ask
+  v
+Python Backend
+  |
+  +-- Telethon Client
+  |     خواندن کانال‌ها و چت‌ها
+  |
+  +-- Ingestion Pipeline
+  |     دانلود مدیا، استخراج متن، transcription
+  |
+  +-- Chunking + Embedding
+  |     آماده‌سازی برای semantic search
+  |
+  +-- Search Service
+  |     keyword search + vector search
+  |
+  +-- RAG Answer Generator
+        ساخت پاسخ از روی منابع پیدا شده
+```
+
+---
+
+## تکنولوژی‌ها
+
+- Python 3.11+
+- Telethon
+- OpenAI API
+- Google Gemini / Google GenAI
+- ffmpeg
+- SQLite / JSON-compatible local store برای MVP
+- Python lexical search + cosine similarity
+- Telegram Bot API برای رابط کاربر
+- Web UI سبک با `http.server`
+
+---
+
+## دستورات ربات
+
+```text
+/start
+معرفی پروژه و شروع کار
+
+/connect
+اتصال اکانت واقعی تلگرام کاربر
+
+/status
+بررسی وضعیت اتصال
+
+/ingest <channel_url>
+ایندکس سریع و inline یک کانال
+
+/import <channel_url> [limit]
+صف‌کردن یک import کامل و resumable در background
+
+/backup
+راهنمای import فایل بکاپ تلگرام؛ کافی است فایل result.json یا .zip را برای ربات بفرستید
+
+/jobs
+نمایش وضعیت و پیشرفت jobهای import
+
+/canceljob <id>
+لغو یک job در صف یا در حال اجرا
+
+/search <query>
+جستجو در آرشیو
+
+/search <query> --source <channel_url>
+جستجو فقط داخل یک منبع خاص
+
+/search <query> --tag <tag>
+جستجو فقط داخل محتوای تگ‌خورده
+
+/ask <question>
+پرسش از آرشیو با AI
+
+/ask <question> --source <channel_url>
+پرسش فقط از یک کانال یا منبع خاص
+
+/ask <question> --tag <tag>
+پرسش فقط از محتوای یک تگ خاص
+
+/summarize [--source <url>] [--tag <tag>]
+خلاصه‌سازی کل آرشیو، یک منبع، یا یک تگ
+
+/digest [days]
+خلاصه‌ی AI از محتوای اخیر (پیش‌فرض ۷ روز)
+
+/topics [--source <url>] [--tag <tag>]
+خوشه‌بندی موضوعی محتوا
+
+/timeline [--source <url>] [--tag <tag>] [--day]
+نمای زمانی آرشیو بر اساس ماه (یا روز با --day)
+
+/export [--source <url>] [--tag <tag>]
+دانلود خروجی Markdown از کل آرشیو، یک منبع، یا یک تگ
+
+/recent [n]
+نمایش n آیتم اخیر (پیش‌فرض ۱۰)
+
+/stats
+نمای کلی آرشیو (تعداد آیتم‌ها، منابع، تگ‌ها، نوع مدیا، بازه‌ی زمانی)
+
+/sources
+نمایش منابع ایندکس‌شده
+
+/delete <channel_url>
+حذف داده‌های یک منبع
+
+/rule add <keyword> -> <tag>
+تعریف قانون keyword برای تگ‌گذاری خودکار محتوا
+
+/rule add-ai <criterion> -> <tag>
+تعریف قانون AI (تطبیق با LLM، هنگام /rule apply)
+
+/rule list
+نمایش قوانین
+
+/rule remove <id>
+حذف یک قانون
+
+/rule apply
+اعمال دوباره قوانین روی محتوای موجود (backfill)
+
+/airules on|off
+اجرای خودکار قوانین AI روی هر فوروارد جدید (opt-in؛ پیش‌فرض خاموش)
+
+/tags
+نمایش تگ‌ها و تعداد آیتم هر تگ
+
+/tag rename <old> -> <new>
+تغییر نام یک تگ (یا ادغام در تگ موجود)
+
+/tag delete <tag>
+حذف یک تگ از همه‌ی آیتم‌ها
+
+/collection new|add|list|remove|show <name>
+گروه‌بندی چند تگ زیر یک «دفترچه» و نمایش آیتم‌های آن
+(سپس می‌توانید با /summarize --collection <name> یا /export --collection <name> کل دفترچه را خلاصه/خروجی بگیرید)
+
+/setarchive <@channel | off>
+تنظیم کانال آرشیو؛ فورواردهای tag‌خورده به‌صورت خودکار به آن ارسال می‌شوند
+
+/cancel
+لغو flow فعلی
+```
+
+---
+
+## APIهای اصلی
+
+### Ingest Channel
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/channels/ingest \
+  -H 'content-type: application/json' \
+  -d '{
+    "channel_url": "https://t.me/example_channel",
+    "limit": 50
+  }'
+```
+
+### Search
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/search \
+  -H 'content-type: application/json' \
+  -d '{
+    "query": "هوش مصنوعی و تولید ویدیو",
+    "channel_url": "https://t.me/example_channel",
+    "top_k": 5
+  }'
+```
+
+### Ask AI
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/ask \
+  -H 'content-type: application/json' \
+  -d '{
+    "query": "از این کانال چه ابزارهایی برای ساخت ویدیو معرفی شده؟",
+    "channel_url": "https://t.me/example_channel"
+  }'
+```
+
+### Stats / Recent / Timeline (read-only)
+
+```bash
+curl http://127.0.0.1:8000/api/stats
+curl 'http://127.0.0.1:8000/api/recent?limit=10'
+curl 'http://127.0.0.1:8000/api/timeline?granularity=month'
+```
+
+این endpointها مثل بقیه‌ی API با `WEB_API_TOKEN` (یا فقط loopback در نبود توکن) محافظت می‌شوند.
+
+---
+
+## مسیر محصول نهایی
+
+هدف نهایی این پروژه فقط search ساده نیست. مسیر محصول به این شکل است:
+
+```text
+Telegram AI Archive
+  |
+  +-- Import کامل کانال‌ها و چت‌ها
+  +-- Forwarded Inbox برای پیام‌های فورواردشده
+  +-- Rule Engine برای جدا کردن محتواها با keyword یا AI
+  +-- Tag / Folder / Collection
+  +-- Search متنی و معنایی
+  +-- NotebookLM داخلی برای پرسش و پاسخ
+  +-- MCP Server برای اتصال به AI tools
+```
+
+---
+
+## Rule Engine + Tags
+
+کاربر می‌تواند قانون keyword→tag تعریف کند:
+
+```text
+/rule add Claude -> AI Tools
+/rule add Al Mouj -> Real Estate
+/rule add golden visa -> Oman Visa
+/rule add قیمت -> Leads
+```
+
+هر محتوای جدیدی که وارد سیستم شود (ingest کانال، transcript مدیا، یا Forwarded Inbox) از نظر متن و کپشن بررسی می‌شود. اگر keyword یک rule (به‌صورت substring و case-insensitive) در متن باشد:
+
+- tag مربوطه به آن آیتم وصل می‌شود
+- بعداً با `/search ... --tag <tag>` و `/ask ... --tag <tag>` قابل فیلتر است
+- `/tags` تگ‌ها و تعداد آیتم هر تگ را نشان می‌دهد
+- `/tag rename <old> -> <new>` نام یک تگ را عوض می‌کند (یا در تگ موجود ادغام می‌کند) و `/tag delete <tag>` آن را از همه‌ی آیتم‌ها حذف می‌کند
+- `/rule apply` قوانین فعلی را روی محتوای موجود دوباره اعمال می‌کند (backfill)
+
+**قوانین AI-based:** علاوه‌بر قوانین keyword، می‌توانید قانونی با معیار زبان طبیعی تعریف کنید که یک LLM درباره‌ی تطبیق آن تصمیم می‌گیرد:
+
+```text
+/rule add-ai پست‌هایی که درباره‌ی ابزارهای ساخت ویدیو با هوش مصنوعی هستند -> Video AI
+/rule add-ai هر چیزی مرتبط با قیمت و فروش ملک -> Leads
+```
+
+قوانین AI به‌خاطر هزینه‌ی LLM فقط هنگام `/rule apply` اجرا می‌شوند (یک فراخوانی LLM به‌ازای هر آیتم) و نیازمند کلید Gemini هستند؛ اگر کلیدی تنظیم نشده باشد، نادیده گرفته می‌شوند و در خروجی اطلاع داده می‌شود. قوانین keyword همچنان روی هر ingest به‌صورت خودکار اعمال می‌شوند.
+
+**Auto-forward:** با `/setarchive <@channel>` یک کانال آرشیو تنظیم می‌شود؛ از آن پس هر پیامی که به ربات فوروارد می‌کنید و متن آن با یک قانون tag مطابقت دارد، علاوه‌بر ذخیره در inbox، با ذکر منبع/تگ‌ها/لینک به آن کانال هم فوروارد می‌شود (ربات باید ادمین کانال باشد). برای غیرفعال‌کردن: `/setarchive off`.
+
+قوانین AI علاوه‌بر `/rule apply`، با `/airules on` به‌صورت خودکار روی هر فوروارد جدید هم اجرا می‌شوند (opt-in، یک فراخوانی LLM به‌ازای هر آیتم؛ import انبوه کانال هیچ‌وقت auto-classify نمی‌شود).
+
+**هنوز اضافه نشده (follow-up):** auto-forward برای import کانال‌ها (فعلاً فقط مسیر Forwarded Inbox) و دانلود/پردازش مدیا داخل import کامل کانال.
+
+---
+
+## Import بکاپ تلگرام (JSON / ZIP)
+
+می‌توانید کل تاریخچه‌ی یک چت یا اکانت را بدون نیاز به `/connect` وارد کنید:
+
+۱. در **Telegram Desktop** به `Settings → Advanced → Export Telegram data` (یا روی یک چت: `Export chat history`) بروید.
+۲. فرمت را روی **Machine-readable JSON** بگذارید (نه HTML).
+۳. خروجی یک فایل `result.json` (یا پوشه‌ای شامل آن به‌همراه مدیا) است؛ می‌توانید پوشه را zip کنید.
+
+سپس:
+
+- **از ربات:** فایل `result.json` یا `.zip` را مستقیماً برای ربات بفرستید. ربات آن را import می‌کند، محتوا را قابل‌جستجو می‌کند و یک نسخه‌ی Markdown برمی‌گرداند. (سقف ۲۰ مگابایت به‌خاطر محدودیت دانلود Bot API؛ برای فایل بزرگ‌تر از وب استفاده کنید.)
+- **از وب:** در `/app` کارت «Import Telegram Backup»، فایل را آپلود کنید. محتوا در آرشیو وب قابل‌جستجو می‌شود و دکمه‌ی دانلود Markdown ظاهر می‌شود.
+
+هر چت به یک منبع مصنوعی `backup://<id>` تبدیل می‌شود و import به‌صورت idempotent است (وارد کردن دوباره‌ی همان فایل چیزی اضافه نمی‌کند).
+
+### API
+
+```bash
+curl -X POST 'http://127.0.0.1:8000/api/backup/import' \
+  -H 'X-Filename: result.json' \
+  -H 'content-type: application/octet-stream' \
+  --data-binary @result.json
+```
+
+پاسخ شامل تعداد چت/پیام واردشده و متن کامل Markdown است. مثل بقیه‌ی API با `WEB_API_TOKEN` (یا loopback) محافظت می‌شود.
+
+---
+
+## MCP Server
+
+یک **Telegram MCP Server** (read-only) پیاده‌سازی شده تا آرشیو تلگرام کاربر فقط داخل ربات نماند و به ابزارهای AI دیگر (Claude، Cursor، …) وصل شود. با JSON-RPC 2.0 روی stdio کار می‌کند و فقط با کتابخانه‌ی استاندارد نوشته شده (بدون وابستگی جدید).
+
+اجرا:
+
+```bash
+MCP_OWNER_ID=0 python -m telegram_notebook.mcp_server
+```
+
+`MCP_OWNER_ID` تعیین می‌کند آرشیو کدام کاربر expose شود (پیش‌فرض `0` = آرشیو داشبورد وب؛ برای آرشیو یک کاربر ربات، `bot_user_id` او را بدهید).
+
+ابزارهای فعلی MCP:
+
+```text
+list_sources              نمایش کانال‌ها/چت‌ها و forwarded inbox
+list_tags                 نمایش تگ‌ها و تعداد آیتم هر تگ
+search_telegram_archive   جستجو (با فیلتر اختیاری source/tag)
+get_message               متن کامل یک آیتم با media_item_id
+ask_telegram_notebook     پرسش و پاسخ RAG از روی آرشیو
+summarize_source          خلاصه‌سازی کل آرشیو، یک منبع، یا یک تگ
+list_topics               خوشه‌بندی موضوعی محتوا (آفلاین، از embeddingها)
+timeline                  شمارش آیتم‌ها بر اساس بازه‌ی زمانی (ماه/روز)
+archive_stats             نمای کلی آرشیو (تعداد، نوع مدیا، بازه‌ی زمانی)
+list_recent               فهرست آخرین آیتم‌های آرشیو (جدیدترین اول)
+```
+
+همه‌ی ابزارها read-only هستند؛ ابزارهای حساس (import، forward، delete، create_rule) عمداً expose نشده‌اند و در صورت نیاز باید بعداً با permission و confirmation اضافه شوند.
+
+---
+
+## توسعه و تست
+
+CI روی هر push و PR، lint و تست را اجرا می‌کند (`.github/workflows/ci.yml`). برای اجرای محلی:
+
+```bash
+pip install -e ".[dev]"
+ruff check src/ tests/
+pytest -q
+```
+
+## نصب
+
+```bash
+git clone https://github.com/shm379/telegram-notebooklm-mvp.git
+cd telegram-notebooklm-mvp
+
+uv venv
+source .venv/bin/activate
+uv pip install -e .
+cp .env.example .env
+```
+
+روی ویندوز:
+
+```powershell
+uv venv
+.venv\Scripts\activate
+uv pip install -e .
+copy .env.example .env
+```
+
+---
+
+## پیش‌نیازها
+
+- Python 3.11+
+- ffmpeg
+- Telegram API credentials:
+  - `TELEGRAM_API_ID`
+  - `TELEGRAM_API_HASH`
+  - `TELEGRAM_SESSION_STRING` برای اجرای production بهتر است
+- `TELEGRAM_BOT_TOKEN` برای اجرای ربات
+- یکی از این providerها:
+  - `OPENAI_API_KEY`
+  - `GEMINI_API_KEY`
+
+---
+
+## ساخت Telegram Session
+
+```bash
+export TELEGRAM_API_ID=...
+export TELEGRAM_API_HASH=...
+uv run python scripts/create_telegram_session.py
+```
+
+خروجی را در `.env` داخل `TELEGRAM_SESSION_STRING` بگذارید.
+
+اگر `TELEGRAM_SESSION_STRING` نداشته باشید، پروژه از session file محلی استفاده می‌کند و اولین اجرا نیاز به login تعاملی دارد.
+
+---
+
+## اجرای Web UI
+
+```bash
+python -m telegram_notebook.main
+```
+
+سپس باز کنید:
+
+```text
+http://127.0.0.1:8000        # صفحه‌ی لندینگ (معرفی)
+http://127.0.0.1:8000/app    # داشبورد: Ingest / Search / Ask / Library / Import بکاپ
+```
+
+---
+
+## اجرای ربات تلگرام
+
+```bash
+python -m telegram_notebook.bot
+```
+
+---
+
+## محدودیت‌های فعلی
+
+- جداسازی داده بین کاربران انجام شده است (هر کاربر فقط دیتای خودش را می‌بیند؛ مالکیت با `owner_id` روی کانال‌ها اعمال می‌شود).
+- احراز هویت Web API با `WEB_API_TOKEN` و رمزنگاری secrets در دیتابیس با `SECRETS_KEY` اضافه شده؛ برای production هر دو متغیر را تنظیم کنید.
+- storage فعلی برای MVP مناسب است، نه دیتاست بزرگ.
+- session string و API keyها باید قبل از production رمزنگاری شوند.
+- import کامل کانال با صف، progress و resume از طریق `/import` پشتیبانی می‌شود (یک worker در background)؛ هنوز یک sandbox تست برای کل مسیر Telethon وجود ندارد.
+- Forwarded Inbox علاوه‌بر متن/کپشن، مدیای فورواردشده را پردازش می‌کند: صوت/ویدیو/voice با transcription، عکس/PDF با OCR (Gemini multimodal)، و DOCX/XLSX با استخراج محلی (zipfile + XML، بدون کلید API) به متن تبدیل می‌شوند. دانلود مدیای داخل import کامل کانال هنوز اضافه نشده.
+- Rule Engine بر اساس تطبیق keyword (substring) است؛ قوانین AI-based و forward خودکار به کانال آرشیو هنوز اضافه نشده.
+- `/topics` خوشه‌بندی موضوعی را روی embeddingهای موجود انجام می‌دهد (greedy cosine، آفلاین)؛ نیازمند آن است که محتوا با کلید embedding ایندکس شده باشد. برچسب خوشه‌ها در صورت وجود کلید Gemini با LLM ساخته می‌شود و در غیر این صورت به پرتکرارترین واژه‌ها برمی‌گردد. `/timeline` نمای زمانی (ماه/روز) را روی تاریخ پیام‌ها می‌سازد.
+- برای دیتاست بزرگ بهتر است به PostgreSQL + pgvector یا Qdrant مهاجرت شود.
+
+---
+
+## نکات امنیتی مهم
+
+- هیچ token، API key، session string یا credential واقعی را داخل repo commit نکنید.
+- اگر قبلاً token واقعی داخل `.env.example` یا history پروژه commit شده، آن token را فوراً revoke/regenerate کنید.
+- برای production، session کاربران باید encrypt شود.
+- برای هر search یا ask باید فیلتر user_id اعمال شود.
+- کاربر باید امکان `disconnect` و `delete my data` داشته باشد.
+- ابزارهای MCP در ابتدا باید read-only باشند.
+
+---
+
+## Roadmap پیشنهادی
+
+### Phase 1 — Stabilize Core
+
+- پاکسازی secrets از repo
+- اصلاح README و env example
+- پایدارسازی `/connect`, `/ingest`, `/search`, `/ask`
+- اصلاح error handling و logging
+
+### Phase 2 — Multi-user Data Model
+
+- اضافه کردن user_id به sources, messages, media, chunks
+- جداسازی کامل دیتای کاربران
+- permission و access control
+
+### Phase 3 — Forwarded Inbox
+
+- پردازش پیام‌های فورواردشده
+- ذخیره text, caption, media, document
+- OCR برای عکس‌ها
+- استخراج متن از PDF/DOCX/Excel
+
+### Phase 4 — Rules + Tags
+
+- تعریف keyword rule
+- tag و collection
+- forward اتومات به کانال‌های آرشیو
+- ruleهای AI-based
+
+### Phase 5 — Full Import Jobs
+
+- import کامل کانال از اول تا آخر
+- resume بعد از قطع شدن
+- progress tracking
+- queue/background worker
+
+### Phase 6 — NotebookLM داخلی
+
+- پاسخ‌سازی بهتر با منبع
+- summary per source
+- summary per tag
+- timeline و topic clustering ✅ (`/timeline`، `/topics`)
+
+### Phase 7 — MCP Server
+
+- read-only MCP tools
+- اتصال به AI clients
+- ابزارهای search, ask, list_sources, get_message
+
+---
+
+## خلاصه
+
+Telegram NotebookLM MVP تلاش می‌کند تلگرام را به یک حافظه هوشمند تبدیل کند؛ جایی که کاربر بتواند کانال‌ها، چت‌ها و پیام‌های فورواردی خود را ذخیره کند، با keyword یا semantic search داخل آن‌ها بگردد، محتواها را با rule جدا کند و در نهایت مثل NotebookLM از آرشیو خودش سؤال بپرسد.
+
+این پروژه پایه‌ای برای ساخت یک محصول بزرگ‌تر است:
+
+```text
+Telegram Memory for AI Assistants
+```
