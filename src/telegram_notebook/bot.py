@@ -21,6 +21,7 @@ from .export import build_markdown_export
 from .extraction import ExtractionService
 from .jobs import JobWorker
 from .logging_config import setup_logging
+from .office import detect_office_kind, extract_office_text
 from .pipeline import IngestionPipeline
 from .provider_http import gemini_generate_content
 from .recent import recent_rows
@@ -653,14 +654,16 @@ class NotebookBot:
         return None
 
     @staticmethod
-    def _media_route(kind: str, mime_type: str | None) -> str | None:
-        """Which processor handles a media kind: 'transcribe', 'extract', or None."""
+    def _media_route(kind: str, mime_type: str | None, file_name: str | None = None) -> str | None:
+        """Which processor handles a media kind: 'transcribe', 'extract', 'office', or None."""
         if kind in ("voice", "audio", "video", "video_note"):
             return "transcribe"
         mt = (mime_type or "").lower()
         if kind == "photo":
             return "extract"
         if kind == "document":
+            if detect_office_kind(file_name, mime_type):
+                return "office"  # DOCX/XLSX: extracted locally, no API key needed
             if mt == "application/pdf" or mt.startswith("image/"):
                 return "extract"
             if mt.startswith(("audio/", "video/")):
@@ -677,18 +680,23 @@ class NotebookBot:
         ref = self._forward_file_ref(message)
         if not ref or not ref.get("file_id"):
             return None
-        route = self._media_route(ref["kind"], ref.get("mime_type"))
+        route = self._media_route(ref["kind"], ref.get("mime_type"), ref.get("file_name"))
         if route is None:
             return None
-        service = transcription if route == "transcribe" else extraction
-        if not (service and service.enabled):
-            return None
+        # Office docs (DOCX/XLSX) are parsed locally — no service or API key required.
+        if route != "office":
+            service = transcription if route == "transcribe" else extraction
+            if not (service and service.enabled):
+                return None
         path = download(ref["file_id"], ref["file_name"])
         if not path:
             return None
         try:
             if route == "transcribe":
                 return (transcription.transcribe_media(path, path.parent) or "").strip()
+            if route == "office":
+                kind = detect_office_kind(ref.get("file_name"), ref.get("mime_type"))
+                return (extract_office_text(path, kind) or "").strip()
             return (extraction.extract(path) or "").strip()
         except Exception:
             logger.exception("Forwarded media %s failed", route)

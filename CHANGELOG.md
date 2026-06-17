@@ -1,25 +1,20 @@
 # Changelog
 
-## Telegram backup import + landing page + web app (2026-06-17)
+## DOCX / XLSX extraction for forwarded documents (2026-06-17)
 
-import فایل بکاپ تلگرام (JSON/ZIP) → آرشیو قابل‌جستجو + Markdown، به‌علاوه‌ی یک صفحه‌ی لندینگ و امکان استفاده از طریق وب‌سایت.
+استخراج متن از اسناد Office فورواردشده، به‌صورت محلی و بدون کلید API.
 
 ### Behaviour
-- **Import بکاپ تلگرام:** خروجی *Machine-readable JSON* تلگرام دسکتاپ (فایل `result.json` یا یک `.zip` از پوشه‌ی export) پارس می‌شود؛ هم export تک‌چت (با `messages`) و هم export کامل اکانت (با `chats.list`). هر پیام به متن قابل‌جستجو تبدیل، chunk، embed و با قوانین کاربر تگ می‌شود — دقیقاً مثل کانال‌های ingest‌شده، پس بلافاصله با `/search` و `/ask` قابل پرس‌وجوست. هر چت یک منبع مصنوعی `backup://<id>` می‌شود. import به‌صورت idempotent است (کلید: id پیام در همان چت).
-- **تبدیل به Markdown:** کل بکاپ به یک سند Markdown خوانا (لاگ گفتگو با فرستنده/تاریخ/متن و برچسب مدیا) رندر می‌شود.
-- **ربات:** کافی است فایل `.json`/`.zip` بکاپ را برای ربات بفرستید؛ ربات آن را import می‌کند و نسخه‌ی Markdown را برمی‌گرداند (سقف ۲۰ مگابایت به‌خاطر محدودیت دانلود Bot API؛ برای فایل بزرگ‌تر از وب استفاده کنید). دستور راهنمای `/backup` اضافه شد.
-- **وب‌سایت:** صفحه‌ی **لندینگ** معرفی روی `/` (معرفی امکانات، «چطور کار می‌کند»، و بخش Import بکاپ) و **داشبورد/وب‌اپ** روی `/app`. داشبورد یک کارت «Import Telegram Backup» گرفت که فایل را آپلود (آرشیو مشترک وب، `WEB_OWNER_ID`)، محتوا را قابل‌جستجو می‌کند و دکمه‌ی دانلود Markdown می‌دهد.
+- فوروارد یک فایل `.docx` یا `.xlsx` (تشخیص با پسوند یا MIME type) حالا متن آن را استخراج و در inbox قابل‌جستجو ذخیره می‌کند. برخلاف OCR/PDF که به Gemini نیاز دارد، این مسیر **کاملاً محلی** است (هیچ کلید API یا شبکه‌ای لازم نیست).
 
-### Components
-- ماژول خالص `telegram_backup.py`: `read_export` (تشخیص zip/json و استخراج `result.json` از zip)، `parse_export` (نرمال‌سازی به `ParsedChat`/`ParsedMessage`، رد پیام‌های service)، `message_text` (flatten متن با اولویت `text_entities` و inline‌کردن لینک‌ها)، `media_label`، و `render_markdown`.
-- `IngestionPipeline.ingest_backup` (و `_ingest_backup_chat`) که از مسیر موجود `_process_text_data`/`_apply_rules` استفاده می‌کند؛ ثابت `BACKUP_SOURCE_PREFIX`.
-- ربات: `_is_backup_document`، `_handle_backup_document` (دانلود از Bot API، parse، ingest، ارسال Markdown) و `_handle_backup_info`.
-- وب: ثابت `LANDING_HTML`، route جدید `/` (لندینگ) و `/app` (داشبورد)، و endpoint `POST /api/backup/import` (بدنه‌ی خام فایل + هدر `X-Filename`؛ بدون نیاز به multipart) که آرشیو را import و Markdown را برمی‌گرداند.
+### Design
+- ماژول خالص `office.py` با `detect_office_kind`، `extract_docx_text`، `extract_xlsx_text` و dispatcher `extract_office_text` — فقط با کتابخانه‌ی استاندارد (`zipfile` + `xml.etree`). تطبیق تگ‌ها روی local-name است تا هر دو واریانت namespace (transitional/strict) پشتیبانی شود.
+- DOCX: متن پاراگراف‌ها (شامل داخل جدول‌ها) با join شدن runها. XLSX: resolve کردن sharedStrings + inline strings + اعداد، با جداکننده‌ی tab/newline و جداسازی شیت‌ها.
+- `NotebookBot._media_route` مسیر جدید `"office"` را برمی‌گرداند و `_process_forwarded_media` آن را بدون نیاز به سرویس/`enabled` اجرا می‌کند.
 
 ### Tests
-- `tests/test_telegram_backup.py`: flatten متن/لینک، برچسب مدیا، parse تک‌چت/کامل و رد service، read از json/zip و خطاها، ساختار Markdown، و ingest pipeline (قابل‌جستجو شدن، idempotency، ایزولاسیون per-owner).
-- `tests/test_backup_bot.py`: تشخیص فایل بکاپ و orchestration کامل هندلر ربات (import + ارسال Markdown، رد فایل بزرگ، گزارش فایل ناخوانا).
-- `tests/test_backup_web.py`: سرو لندینگ روی `/`، داشبورد روی `/app`، وجود کارت بکاپ، و endpoint import (موفق، بدنه‌ی خالی، JSON نامعتبر).
+- `tests/test_office.py`: تشخیص نوع، استخراج DOCX (join runها/پاراگراف‌ها)، XLSX (shared/inline/عدد، چند شیت، نبود sharedStrings)، و رد فرمت ناشناخته.
+- `tests/test_inbox_media.py`: routing اسناد Office و orchestration کامل بدون هیچ سرویس.
 
 ## Opt-in AI auto-tagging on forwards (2026-06-12)
 
