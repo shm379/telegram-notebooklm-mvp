@@ -1,5 +1,26 @@
 # Changelog
 
+## Telegram Toolset: account / scheduled / resend / llm-export / deleted (2026-06-17)
+
+پورت کامل پنج ماژول [uburuntu/Telegram-Toolset](https://github.com/uburuntu/Telegram-Toolset) به ربات و سایت، روی اکانت connect‌شده.
+
+### Behaviour
+- **`/account`** — اطلاعات اکانت تلگرامِ لینک‌شده.
+- **`/scheduled <chat> [cancel <id>]`** — نمایش و لغو پیام‌های زمان‌بندی‌شده‌ی یک چت.
+- **`/llmexport <chat> [limit]`** — خروجی یک چت به‌صورت transcript مارک‌داون دوست‌دار AI (فایل `.md`).
+- **`/resend <target> <text>`** — ارسال پیام از طرف اکانت کاربر به یک مقصد.
+- **`/watchdeleted on|off` + `/deleted [n]`** — بازیابی پیام‌های حذف‌شده با یک watcher همیشه‌روشنِ opt-in. چون تلگرام API بازیابی حذف‌های گذشته ندارد، watcher پیام‌های ورودی را cache و هنگام حذف، نسخه‌ی ذخیره‌شده را surface می‌کند؛ **فقط پیام‌های بعد از فعال‌سازی** قابل بازیابی‌اند.
+- **سایت:** کارت «Telegram Toolset» در داشبورد + endpointهای `/api/account`، `/api/scheduled`، `/api/deleted`، `/api/llmexport`، `/api/resend` (روی اکانت سرور؛ watcher وب با `WEB_WATCH_DELETED=1`).
+
+### Design
+- `toolset.py`: wrapperهای async تلتون (account_info / list_scheduled / cancel_scheduled / resend_text / fetch_chat_messages) + formatter/builderهای خالصِ قابل‌تست (format_account / format_scheduled / build_llm_export).
+- `deleted_watcher.py`: `recover_deleted` (منطق خالص cache→recovered) و `DeletedWatcherManager` (یک thread/loop و کلاینت Telethon per-user با هندلرهای `NewMessage`/`MessageDeleted`؛ شروع خودکار در boot، toggle امن، و مقاوم در برابر race توقف زودهنگام).
+- DB: جداول idempotent `cached_messages` و `recovered_deleted`، ستون `watch_deleted` روی `bot_users`، و متدهای `cache_message`/`take_cached`/`add_recovered`/`list_recovered`/`set_watch_deleted`/`list_watch_deleted_owners`.
+- کلاینت‌ها on-demand ساخته می‌شوند (مثل `/ingest`)؛ خطاها بلعیده و log می‌شوند تا ربات crash نکند.
+
+### Tests
+- `tests/test_toolset.py`، `tests/test_deleted_watcher.py`، `tests/test_toolset_handlers.py` — formatterها/builderها، منطق cache/recover و migrationها، lifecycle منیجر (با کلاینت fake)، و orchestration هندلرها با FakeClient/FakeApi. کل مجموعه ۱۸۹ تست سبز.
+
 ## Audio Overview (podcast) + safe Markdown rendering (2026-06-17)
 
 دو قابلیت از مقایسه با پروژه‌های مشابه: تبدیل آرشیو به پادکست (شکاف امضای NotebookLM) و رندر درست خروجی AI در تلگرام.

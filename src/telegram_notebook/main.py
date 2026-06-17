@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import logging
+import os
 import threading
 from dataclasses import asdict, dataclass
 from http import HTTPStatus
@@ -116,6 +117,30 @@ class AppState:
 
 
 state = AppState()
+
+
+def _run_account_op(coro_factory):
+    """Run a Telethon coroutine against the server's connected account.
+
+    The web dashboard has a single connected account (``TELEGRAM_SESSION_STRING``),
+    so the Telegram-Toolset endpoints operate on it. Builds an on-demand client,
+    runs the coroutine, and disconnects.
+    """
+    settings = state.settings
+    if not settings.telegram_session_string:
+        raise RuntimeError("Server account not connected. Set TELEGRAM_SESSION_STRING.")
+    from .telegram_client import build_client_from_session_string
+
+    client = build_client_from_session_string(
+        settings, settings.telegram_session_string,
+        api_id=settings.telegram_api_id, api_hash=settings.telegram_api_hash,
+    )
+
+    async def _do():
+        async with client:
+            return await coro_factory(client)
+
+    return asyncio.run(_do())
 
 
 INDEX_HTML = """
@@ -320,6 +345,28 @@ INDEX_HTML = """
           <div class="status" id="libraryStatus"></div>
           <div class="tiny" id="libraryStats" style="margin-top:10px;"></div>
           <div class="results" id="libraryRecent"></div>
+        </div>
+
+        <div class="card">
+          <h2>Telegram Toolset</h2>
+          <p class="tiny">Acts on the server's connected account (TELEGRAM_SESSION_STRING).</p>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button id="accountBtn" type="button">Account</button>
+            <button id="deletedBtn" class="secondary" type="button">Recovered deleted</button>
+          </div>
+          <label for="toolsetPeer" style="margin-top:10px;">Chat (for scheduled / export)</label>
+          <input id="toolsetPeer" placeholder="@channel or https://t.me/..." />
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button id="scheduledBtn" type="button">Scheduled</button>
+            <button id="llmExportBtn" class="secondary" type="button">LLM export</button>
+          </div>
+          <label for="resendTarget" style="margin-top:10px;">Resend target</label>
+          <input id="resendTarget" placeholder="@user or chat id" />
+          <label for="resendText">Resend text</label>
+          <textarea id="resendText" placeholder="Message to send on your behalf"></textarea>
+          <button id="resendBtn" type="button">Send</button>
+          <div class="status" id="toolsetStatus"></div>
+          <div class="results" id="toolsetResults"></div>
         </div>
       </section>
 
@@ -567,6 +614,80 @@ INDEX_HTML = """
         }
       });
 
+      // --- Telegram Toolset ---
+      const toolsetStatus = document.getElementById("toolsetStatus");
+      const toolsetResults = document.getElementById("toolsetResults");
+      const toolsetPeer = document.getElementById("toolsetPeer");
+
+      function renderToolset(lines) {
+        toolsetResults.innerHTML = "";
+        for (const line of lines) {
+          const el = document.createElement("div");
+          el.className = "result";
+          el.textContent = line;
+          toolsetResults.appendChild(el);
+        }
+      }
+
+      async function runToolset(label, fn) {
+        toolsetStatus.textContent = label + "…";
+        toolsetResults.innerHTML = "";
+        try {
+          await fn();
+          toolsetStatus.textContent = "";
+        } catch (error) {
+          toolsetStatus.textContent = error.message;
+        }
+      }
+
+      document.getElementById("accountBtn").addEventListener("click", () => runToolset("Account", async () => {
+        const a = await fetchJson("/api/account");
+        const name = [a.first_name, a.last_name].filter(Boolean).join(" ") || "—";
+        renderToolset([
+          "Name: " + name,
+          "Username: " + (a.username ? "@" + a.username : "—"),
+          "ID: " + (a.id || "—"),
+          "Phone: " + (a.phone || "—"),
+          "Premium: " + (a.premium ? "yes" : "no"),
+        ]);
+      }));
+
+      document.getElementById("deletedBtn").addEventListener("click", () => runToolset("Recovered deleted", async () => {
+        const d = await fetchJson("/api/deleted?limit=20");
+        const items = d.items || [];
+        renderToolset(items.length ? items.map(r => `${r.sender || "Unknown"}${r.chat_title ? " · " + r.chat_title : ""}: ${r.text || ""}`) : ["No recovered deleted messages."]);
+      }));
+
+      document.getElementById("scheduledBtn").addEventListener("click", () => runToolset("Scheduled", async () => {
+        const peer = toolsetPeer.value.trim();
+        if (!peer) throw new Error("Enter a chat first.");
+        const d = await fetchJson("/api/scheduled?peer=" + encodeURIComponent(peer));
+        const items = d.items || [];
+        renderToolset(items.length ? items.map(it => `#${it.id} · ${it.date || "?"} — ${it.text || "(media)"}`) : ["No scheduled messages."]);
+      }));
+
+      document.getElementById("llmExportBtn").addEventListener("click", () => runToolset("LLM export", async () => {
+        const peer = toolsetPeer.value.trim();
+        if (!peer) throw new Error("Enter a chat first.");
+        const d = await fetchJson("/api/llmexport", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ peer, limit: 200 }) });
+        const blob = new Blob([d.markdown || ""], { type: "text/markdown" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "telegram-" + (d.chat_label || "chat").replace(/[^a-z0-9_-]+/gi, "-").toLowerCase() + ".md";
+        link.click();
+        URL.revokeObjectURL(url);
+        renderToolset(["Exported " + (d.count || 0) + " message(s) from " + (d.chat_label || peer) + "."]);
+      }));
+
+      document.getElementById("resendBtn").addEventListener("click", () => runToolset("Send", async () => {
+        const target = document.getElementById("resendTarget").value.trim();
+        const text = document.getElementById("resendText").value.trim();
+        if (!target || !text) throw new Error("Target and text are required.");
+        const d = await fetchJson("/api/resend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target, text }) });
+        renderToolset(["Sent to " + target + " (message #" + (d.message_id || "?") + ")."]);
+      }));
+
       loadSettings().catch(error => {
         settingsStatus.textContent = error.message;
       });
@@ -697,6 +818,29 @@ class RequestHandler(BaseHTTPRequestHandler):
                 items = state.repository.timeline_items(owner_id=WEB_OWNER_ID)
                 self._send_json({"granularity": granularity, "periods": build_timeline(items, granularity=granularity)})
                 return
+            if parsed.path == "/api/account":
+                if not self._require_auth():
+                    return
+                from . import toolset
+                self._send_json(_run_account_op(lambda c: toolset.account_info(c)))
+                return
+            if parsed.path == "/api/scheduled":
+                if not self._require_auth():
+                    return
+                peer = parse_qs(parsed.query).get("peer", [""])[0].strip()
+                if not peer:
+                    self._send_json({"detail": "peer is required"}, status=400)
+                    return
+                from . import toolset
+                items = _run_account_op(lambda c: toolset.list_scheduled(c, peer))
+                self._send_json({"peer": peer, "items": items})
+                return
+            if parsed.path == "/api/deleted":
+                if not self._require_auth():
+                    return
+                limit = _query_int(parse_qs(parsed.query), "limit", default=20, lo=1, hi=100)
+                self._send_json({"items": state.repository.list_recovered(owner_id=WEB_OWNER_ID, limit=limit)})
+                return
             self._send_json({"detail": "Not found"}, status=HTTPStatus.NOT_FOUND)
         except Exception as exc:
             logger.exception("GET %s failed", parsed.path)
@@ -817,14 +961,80 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"detail": str(exc)}, status=400)
             return
 
+        if parsed.path == "/api/llmexport":
+            peer = str(payload.get("peer", "")).strip()
+            limit = int(payload.get("limit", 200))
+            if not peer:
+                self._send_json({"detail": "peer is required"}, status=400)
+                return
+            try:
+                from . import toolset
+                chat_label, rows = _run_account_op(lambda c: toolset.fetch_chat_messages(c, peer, limit=limit))
+                self._send_json({
+                    "peer": peer,
+                    "chat_label": chat_label,
+                    "count": len(rows),
+                    "markdown": toolset.build_llm_export(chat_label, rows),
+                })
+            except Exception as exc:
+                logger.exception("llmexport request failed")
+                self._send_json({"detail": str(exc)}, status=400)
+            return
+
+        if parsed.path == "/api/resend":
+            target = str(payload.get("target", "")).strip()
+            text = str(payload.get("text", "")).strip()
+            if not target or not text:
+                self._send_json({"detail": "target and text are required"}, status=400)
+                return
+            try:
+                from . import toolset
+                msg_id = _run_account_op(lambda c: toolset.resend_text(c, target, text))
+                self._send_json({"target": target, "message_id": msg_id})
+            except Exception as exc:
+                logger.exception("resend request failed")
+                self._send_json({"detail": str(exc)}, status=400)
+            return
+
         self._send_json({"detail": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: object) -> None:
         return
 
 
+def _maybe_start_web_watcher() -> None:
+    """Start a deleted-message watcher for the server account when WEB_WATCH_DELETED=1."""
+    flag = (os.environ.get("WEB_WATCH_DELETED", "") or "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return
+    settings = state.settings
+    if not settings.telegram_session_string:
+        logger.warning("WEB_WATCH_DELETED set but TELEGRAM_SESSION_STRING is empty; skipping watcher.")
+        return
+    from .deleted_watcher import DeletedWatcherManager
+    from .telegram_client import build_client_from_session_string
+
+    def _build(user: dict) -> object:
+        return build_client_from_session_string(
+            settings, user["session_string"], api_id=user.get("api_id"), api_hash=user.get("api_hash"),
+        )
+
+    manager = DeletedWatcherManager(repository=state.repository, build_client=_build)
+    manager.start_for_user({
+        "bot_user_id": WEB_OWNER_ID,
+        "session_string": settings.telegram_session_string,
+        "api_id": settings.telegram_api_id,
+        "api_hash": settings.telegram_api_hash,
+    })
+    logger.info("Started server-account deleted-message watcher (WEB_WATCH_DELETED).")
+
+
 def run(host: str = "127.0.0.1", port: int = 8000) -> None:
     setup_logging()
+    try:
+        _maybe_start_web_watcher()
+    except Exception:
+        logger.exception("Could not start web deleted-message watcher")
     server = ThreadingHTTPServer((host, port), RequestHandler)
     logger.info("Serving on http://%s:%s", host, port)
     server.serve_forever()

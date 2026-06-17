@@ -73,6 +73,7 @@
 - **Stats**: `/stats` نمای کلی آرشیو (تعداد آیتم‌ها، منابع، تگ‌ها، نوع مدیا، و بازه‌ی زمانی) را نشان می‌دهد
 - **Collections (Notebooks)**: `/collection` چند تگ را زیر یک نام گروه می‌کند و آیتم‌های مجموعه را نشان می‌دهد
 - **MCP Server (read-only)**: expose کردن آرشیو به ابزارهای AI با JSON-RPC روی stdio (`python -m telegram_notebook.mcp_server`)
+- **Telegram Toolset** (الهام از [uburuntu/Telegram-Toolset](https://github.com/uburuntu/Telegram-Toolset)؛ روی اکانت connect‌شده): `/account` (اطلاعات اکانت)، `/scheduled` (لیست/لغو پیام‌های زمان‌بندی‌شده)، `/llmexport` (خروجی AI-friendly از یک چت)، `/resend` (ارسال به‌جای کاربر)، و `/watchdeleted` + `/deleted` (بازیابی پیام‌های حذف‌شده با watcher همیشه‌روشن opt-in). همه‌ی این‌ها در سایت هم به‌صورت کارت «Telegram Toolset» و endpointهای `/api/account`، `/api/scheduled`، `/api/deleted`، `/api/llmexport`، `/api/resend` در دسترس‌اند.
 
 ---
 
@@ -230,6 +231,24 @@ Python Backend
 
 /setarchive <@channel | off>
 تنظیم کانال آرشیو؛ فورواردهای tag‌خورده به‌صورت خودکار به آن ارسال می‌شوند
+
+/account
+نمایش اطلاعات اکانت تلگرامِ connect‌شده
+
+/scheduled <chat> [cancel <id>]
+نمایش (یا لغو) پیام‌های زمان‌بندی‌شده‌ی یک چت
+
+/llmexport <chat> [limit]
+خروجی گرفتن یک چت به‌صورت transcript مارک‌داون دوست‌دار AI
+
+/resend <target> <text>
+ارسال یک پیام از طرف اکانت شما به یک مقصد
+
+/watchdeleted on|off
+روشن/خاموش‌کردن watcher بازیابی پیام‌های حذف‌شده (فقط پیام‌های بعد از فعال‌سازی)
+
+/deleted [n]
+نمایش پیام‌های حذف‌شده‌ای که اخیراً بازیابی شده‌اند
 
 /cancel
 لغو flow فعلی
@@ -391,6 +410,27 @@ pip install ".[podcast]"
 - LLM که متن گفتگو را می‌نویسد به‌صورت پیش‌فرض از کلید Gemini کاربر (یا `GEMINI_API_KEY`) استفاده می‌کند؛ در نبود آن از OpenAI. با `PODCAST_LLM_MODEL` قابل override است.
 - اگر extra نصب نشده باشد، `/podcast` پیام راهنمای نصب می‌دهد (به‌جای crash).
 - خروجی markdown دستیار (`/ask`، `/summarize`، `/digest`، …) حالا با [telegramify-markdown](https://github.com/sudoskys/telegramify-markdown) به MarkdownV2 امن تبدیل می‌شود تا فرمت درست رندر شود و کاراکترهای خاص پیام را نشکنند.
+
+---
+
+## Telegram Toolset
+
+پنج ماژول [uburuntu/Telegram-Toolset](https://github.com/uburuntu/Telegram-Toolset) به ربات و سایت پورت شده‌اند. این قابلیت‌ها روی **اکانت کاربرِ connect‌شده** کار می‌کنند (در ربات per-user با `/connect`؛ در سایت روی اکانت سرور یعنی `TELEGRAM_SESSION_STRING`).
+
+| ماژول | ربات | سایت |
+|---|---|---|
+| account-info | `/account` | `GET /api/account` + کارت |
+| scheduled | `/scheduled <chat> [cancel <id>]` | `GET /api/scheduled?peer=` + کارت |
+| llm-export | `/llmexport <chat> [limit]` | `POST /api/llmexport` (دانلود `.md`) |
+| resend | `/resend <target> <text>` | `POST /api/resend` |
+| export-deleted | `/watchdeleted on|off` + `/deleted [n]` | `GET /api/deleted` + watcher با `WEB_WATCH_DELETED=1` |
+
+### نکته‌ی مهم درباره‌ی بازیابی پیام حذف‌شده
+تلگرام **API‌ای برای گرفتن پیام‌های قبلاً حذف‌شده ندارد**. این قابلیت یک **watcher همیشه‌روشنِ opt-in** است که هر پیام ورودی را cache می‌کند و وقتی تلگرام رویداد حذف می‌فرستد، نسخه‌ی cache‌شده را بازیابی می‌کند. بنابراین:
+
+- فقط پیام‌هایی را بازیابی می‌کند که **بعد از فعال‌سازی** دریافت شده باشند — حذف‌های گذشته قابل بازیابی نیستند.
+- نیازمند یک کلاینت Telethon دائمی per-user است (در ربات با `/watchdeleted on`؛ در سایت با `WEB_WATCH_DELETED=1`).
+- از نظر حریم خصوصی سنگین است (متن همه‌ی پیام‌های ورودی ذخیره می‌شود)؛ با `/watchdeleted off` متوقف می‌شود.
 
 ---
 
