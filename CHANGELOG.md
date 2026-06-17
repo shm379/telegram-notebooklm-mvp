@@ -1,5 +1,25 @@
 # Changelog
 
+## Media + auto-forward in full channel imports, dashboard timeline (2026-06-17)
+
+تکمیل چند follow-up باقی‌مانده در یک تغییر: پردازش مدیا و auto-forward روی import کامل کانال، نمایش timeline در داشبورد، و یک تست end-to-end برای کل مسیر Telethon.
+
+### Behaviour
+- **مدیا در import کانال**: import کامل کانال حالا مثل Forwarded Inbox مدیا را به متن تبدیل می‌کند — صوت/ویدیو با transcription، عکس/PDF با OCR (Gemini)، و DOCX/XLSX با استخراج محلی. قبلاً فقط متن/کپشن و صوت/ویدیو پردازش می‌شد و عکس/سند نادیده گرفته می‌شدند. اگر استخراج‌گری در دسترس نباشد (بدون کلید یا نوع پشتیبانی‌نشده)، فقط کپشن ایندکس می‌شود و فایل بی‌جهت دانلود نمی‌شود.
+- **auto-forward در import کانال**: هر آیتم import‌شده که با یک قانون tag مطابقت دارد، مثل فورواردها به کانال آرشیو کاربر ارسال می‌شود (با همان قالب/escape).
+- **timeline در داشبورد**: پنل Library حالا علاوه‌بر stats و recent، خط‌زمانی ماهانه (`/api/timeline`) را هم نشان می‌دهد.
+
+### Design
+- تابع مشترک `media.route_media(media_kind, mime_type, file_name)` تصمیم مسیر (`transcribe`/`extract`/`office`/None) را متمرکز می‌کند؛ هم `NotebookBot._media_route` (Bot API) و هم `IngestionPipeline` به آن تکیه می‌کنند تا routing یکسان باشد.
+- `telegram_client.iter_all_messages` حالا عکس و سند را هم دسته‌بندی می‌کند (`image`/`document`)، نه فقط audio/video/text.
+- `IngestionPipeline` دو پارامتر اختیاری گرفت: `extraction` (OCR/PDF) و `auto_forward`. `_apply_rules` پس از تگ‌زدن، در صورت وجود callback و label، آیتم را forward می‌کند. مسیر forwarded همچنان از لایه‌ی bot forward می‌کند (بدون double-forward).
+- `ingest_channel` یک پارامتر `client` تزریق‌شونده گرفت تا کل مسیر (download → extract → tag → forward) بدون شبکه/session تست شود.
+
+### Tests
+- `tests/test_channel_import.py`: تست e2e با `FakeTelethonClient` روی text/photo/DOCX/audio، شمارش دانلودها، auto-forward آیتم تگ‌خورده، resume cursor، cancel، و حالت بدون استخراج‌گر (فقط کپشن).
+- `tests/test_media_routing.py`: قرارداد `route_media` برای همه‌ی انواع.
+- `tests/test_web_api.py`: نمایش timeline در داشبورد.
+
 ## DOCX / XLSX extraction for forwarded documents (2026-06-17)
 
 استخراج متن از اسناد Office فورواردشده، به‌صورت محلی و بدون کلید API.

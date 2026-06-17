@@ -74,7 +74,10 @@ def test_api_stats_requires_auth_off_loopback(monkeypatch, tmp_path):
 
 
 def test_index_html_has_library_panel():
-    # The dashboard surfaces the new endpoints in a Library panel.
+    # The dashboard surfaces the read-only endpoints in a Library panel,
+    # including the monthly timeline.
     assert 'id="loadLibraryBtn"' in web.INDEX_HTML
     assert "/api/stats" in web.INDEX_HTML
     assert "/api/recent" in web.INDEX_HTML
+    assert "/api/timeline" in web.INDEX_HTML
+    assert 'id="libraryTimeline"' in web.INDEX_HTML

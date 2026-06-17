@@ -211,12 +211,26 @@ async def iter_all_messages(
     async for message in client.iter_messages(entity, limit=limit, min_id=min_id):
         if not message:
             continue
-            
-        # اگر فقط متن بود، آن را هم مثل یک آیتم مدیا برای ایندکس شدن در نظر می‌گیریم
+
+        # Classify every message into a media kind. Text-only messages are kept too
+        # (indexed by their text); photos and documents are downloaded and turned into
+        # text by the ingestion pipeline (OCR / DOCX-XLSX extraction), mirroring the
+        # forwarded-inbox path.
         file_name = getattr(message.file, "name", None) if message.file else None
         mime_type = getattr(message.file, "mime_type", None) if message.file else None
-        media_kind = detect_media_kind(file_name, mime_type) or "text"
-        
+        media_kind = detect_media_kind(file_name, mime_type)
+        if not media_kind:
+            if getattr(message, "video", None):
+                media_kind = "video"
+            elif getattr(message, "audio", None) or getattr(message, "voice", None):
+                media_kind = "audio"
+            elif getattr(message, "photo", None) or (mime_type or "").startswith("image/"):
+                media_kind = "image"
+            elif message.file is not None:  # any other downloadable document
+                media_kind = "document"
+            else:
+                media_kind = "text"
+
         message_url = None
         if username:
             message_url = f"https://t.me/{username}/{message.id}"

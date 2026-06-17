@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 from .config import get_settings, upsert_env_values
 from .db import Repository, connect
 from .embeddings import EmbeddingService
+from .extraction import ExtractionService
 from .logging_config import setup_logging
 from .model_catalog import ModelCatalogService
 from .pipeline import IngestionPipeline
@@ -61,11 +62,18 @@ class AppState:
                 api_key=self._api_key_for(self.settings.transcription_provider),
                 model=self.settings.transcription_model,
             )
+            # OCR/PDF extraction is Gemini-only; DOCX/XLSX are parsed locally.
+            self.extraction = ExtractionService(
+                provider="gemini",
+                api_key=self.settings.gemini_api_key,
+                model=self.settings.transcription_model,
+            )
             self.pipeline = IngestionPipeline(
                 settings=self.settings,
                 repository=self.repository,
                 transcription=self.transcription,
                 embeddings=self.embeddings,
+                extraction=self.extraction,
             )
             self.search_service = SearchService(self.repository, self.embeddings)
 
@@ -315,10 +323,11 @@ INDEX_HTML = """
 
         <div class="card">
           <h2>Library</h2>
-          <p class="tiny">An overview of your archive and its most recent items.</p>
+          <p class="tiny">An overview of your archive, a monthly timeline, and its most recent items.</p>
           <button id="loadLibraryBtn" type="button">Load library</button>
           <div class="status" id="libraryStatus"></div>
           <div class="tiny" id="libraryStats" style="margin-top:10px;"></div>
+          <div class="tiny" id="libraryTimeline" style="margin-top:10px;"></div>
           <div class="results" id="libraryRecent"></div>
         </div>
       </section>
@@ -534,21 +543,29 @@ INDEX_HTML = """
       const loadLibraryBtn = document.getElementById("loadLibraryBtn");
       const libraryStatus = document.getElementById("libraryStatus");
       const libraryStats = document.getElementById("libraryStats");
+      const libraryTimeline = document.getElementById("libraryTimeline");
       const libraryRecent = document.getElementById("libraryRecent");
 
       loadLibraryBtn.addEventListener("click", async () => {
         libraryStatus.textContent = "در حال بارگذاری...";
         libraryStats.textContent = "";
+        libraryTimeline.textContent = "";
         libraryRecent.innerHTML = "";
         try {
-          const [stats, recent] = await Promise.all([
+          const [stats, timeline, recent] = await Promise.all([
             fetchJson("/api/stats"),
+            fetchJson("/api/timeline?granularity=month"),
             fetchJson("/api/recent?limit=10"),
           ]);
           const kinds = Object.entries(stats.by_kind || {}).map(([k, v]) => `${k}: ${v}`).join(", ");
           libraryStats.textContent =
             `Items: ${stats.items} · Sources: ${stats.sources} · Tags: ${stats.tags}` +
             (kinds ? ` · ${kinds}` : "");
+          const periods = (timeline.periods || []);
+          if (periods.length) {
+            libraryTimeline.textContent =
+              "Timeline — " + periods.map(p => `${p.period}: ${p.count}`).join(" · ");
+          }
           for (const item of (recent.items || [])) {
             const el = document.createElement("div");
             el.className = "result";
