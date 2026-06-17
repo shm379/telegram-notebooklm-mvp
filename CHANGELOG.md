@@ -1,5 +1,23 @@
 # Changelog
 
+## Audio Overview (podcast) + safe Markdown rendering (2026-06-17)
+
+دو قابلیت از مقایسه با پروژه‌های مشابه: تبدیل آرشیو به پادکست (شکاف امضای NotebookLM) و رندر درست خروجی AI در تلگرام.
+
+### Behaviour
+- **`/podcast [--source <url>] [--tag <tag>] [--collection <name>]`**: یک Audio Overview (پادکست گفتگوی صوتی) از کل آرشیو، یک منبع، یک تگ، یا یک collection می‌سازد و فایل صوتی را ارسال می‌کند. با [Podcastfy](https://github.com/souzatharsis/podcastfy)؛ وابستگی سنگین است و به‌صورت extra اختیاری نصب می‌شود (`pip install ".[podcast]"`). در نبود extra، پیام راهنمای نصب می‌دهد (بدون crash). نیازمند کلید LLM (Gemini کاربر یا OpenAI).
+- خروجی markdown دستیار در `/ask`، `/summarize` و `/digest` حالا با [telegramify-markdown](https://github.com/sudoskys/telegramify-markdown) به **MarkdownV2** امن تبدیل می‌شود؛ این هم فرمت (bold/لیست/کد) را درست رندر می‌کند و هم باگ شکستن پیام با کاراکترهای `<`/`&` در حالت `parse_mode=HTML` را رفع می‌کند.
+
+### Design
+- ماژول جدید `formatting.py` با `to_telegram_markdown(text) -> (rendered, parse_mode)`؛ import کتابخانه guarded و تبدیل wrap‌شده تا نبود dependency یا payload خراب هیچ‌وقت تحویل پیام را crash نکند (fallback به متن ساده).
+- ماژول جدید `podcast.py`: `build_podcast_source` (تابع خالص روی همان item dictهای `summary_items`) و `synthesize_podcast` (import تنبل Podcastfy، انتخاب TTS/LLM و کلیدها از env). `PodcastUnavailable` برای نبود extra.
+- `TelegramBotApi.send_message` پارامتر `parse_mode` گرفت (پیش‌فرض `HTML`، سازگار با قبل)؛ متد جدید `send_audio` (sendAudio).
+- تنظیمات `PODCAST_TTS_MODEL` (پیش‌فرض `edge`، بدون کلید) و `PODCAST_LLM_MODEL` به `Settings` اضافه شد.
+
+### Tests
+- `tests/test_formatting.py`: حفظ محتوا، و fallback هنگام نبود کتابخانه یا خطای تبدیل.
+- `tests/test_podcast.py`: ساختار/cap/truncate در `build_podcast_source`، و هندلر `/podcast` (ارسال صوت + پاک‌سازی فایل، پیام نبود extra، نبود کلید LLM، آرشیو خالی).
+
 ## Opt-in AI auto-tagging on forwards (2026-06-12)
 
 تکمیل AI rules: اجرای خودکار آن‌ها روی فورواردهای جدید، به‌صورت opt-in.

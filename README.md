@@ -66,6 +66,7 @@
 - **Import Jobs**: import کامل کانال در background با صف، progress tracking، resume بعد از قطع‌شدن، و امکان لغو
 - **خلاصه‌سازی (NotebookLM)**: `/summarize` برای ساخت خلاصه‌ی ساختارمند از کل آرشیو، یک منبع خاص، یا یک تگ
 - **Digest**: `/digest [days]` خلاصه‌ی AI از محتوای اخیر (پیش‌فرض ۷ روز) را می‌سازد
+- **Audio Overview (Podcast)**: `/podcast` با الهام از NotebookLM، یک پادکست گفتگوی صوتی از کل آرشیو، یک منبع، یک تگ یا یک collection می‌سازد (با [Podcastfy](https://github.com/souzatharsis/podcastfy)؛ به‌صورت extra اختیاری)
 - **Topic clustering**: `/topics` محتوای آرشیو را به‌صورت آفلاین (روی embeddingهای موجود) خوشه‌بندی موضوعی می‌کند؛ در صورت وجود کلید Gemini، برچسب هر خوشه با LLM ساخته می‌شود (وگرنه از پرتکرارترین واژه‌ها)
 - **Timeline**: `/timeline` آرشیو را بر اساس تاریخ (ماه یا روز) گروه‌بندی می‌کند — مکمل زمانیِ `/topics`
 - **Export**: `/export` کل آرشیو، یک منبع یا یک تگ را به‌صورت یک فایل Markdown قابل‌دانلود خروجی می‌گیرد
@@ -171,6 +172,9 @@ Python Backend
 
 /digest [days]
 خلاصه‌ی AI از محتوای اخیر (پیش‌فرض ۷ روز)
+
+/podcast [--source <url>] [--tag <tag>] [--collection <name>]
+ساخت Audio Overview (پادکست) از کل آرشیو، یک منبع، یک تگ یا یک collection
 
 /topics [--source <url>] [--tag <tag>]
 خوشه‌بندی موضوعی محتوا
@@ -363,6 +367,30 @@ list_recent               فهرست آخرین آیتم‌های آرشیو (ج
 ```
 
 همه‌ی ابزارها read-only هستند؛ ابزارهای حساس (import، forward، delete، create_rule) عمداً expose نشده‌اند و در صورت نیاز باید بعداً با permission و confirmation اضافه شوند.
+
+---
+
+## Audio Overview (Podcast)
+
+قابلیت امضای NotebookLM یعنی «Audio Overview»: تبدیل آرشیو به یک پادکست گفتگوی صوتی. این کار با کتابخانه‌ی [Podcastfy](https://github.com/souzatharsis/podcastfy) انجام می‌شود و چون وابستگی سنگینی دارد، به‌صورت **extra اختیاری** نصب می‌شود:
+
+```bash
+pip install ".[podcast]"
+```
+
+سپس در ربات:
+
+```text
+/podcast                      # کل آرشیو
+/podcast --tag "AI Tools"     # فقط یک تگ
+/podcast --source https://t.me/example_channel
+/podcast --collection myNotebook
+```
+
+- موتور TTS با `PODCAST_TTS_MODEL` انتخاب می‌شود: `edge` (رایگان و بدون کلید، پیش‌فرض)، یا `openai`/`gemini`/`elevenlabs` (با کلید provider مربوطه).
+- LLM که متن گفتگو را می‌نویسد به‌صورت پیش‌فرض از کلید Gemini کاربر (یا `GEMINI_API_KEY`) استفاده می‌کند؛ در نبود آن از OpenAI. با `PODCAST_LLM_MODEL` قابل override است.
+- اگر extra نصب نشده باشد، `/podcast` پیام راهنمای نصب می‌دهد (به‌جای crash).
+- خروجی markdown دستیار (`/ask`، `/summarize`، `/digest`، …) حالا با [telegramify-markdown](https://github.com/sudoskys/telegramify-markdown) به MarkdownV2 امن تبدیل می‌شود تا فرمت درست رندر شود و کاراکترهای خاص پیام را نشکنند.
 
 ---
 

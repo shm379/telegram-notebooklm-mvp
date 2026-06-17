@@ -12,3 +12,4 @@ uvicorn==0.41.0
 fastapi==0.135.1
 python-socks[asyncio]
 requests
+telegramify-markdown==1.2.0

@@ -19,9 +19,11 @@ from .db import Repository, connect
 from .embeddings import EmbeddingService
 from .export import build_markdown_export
 from .extraction import ExtractionService
+from .formatting import to_telegram_markdown
 from .jobs import JobWorker
 from .logging_config import setup_logging
 from .pipeline import IngestionPipeline
+from .podcast import PodcastUnavailable, build_podcast_source, synthesize_podcast
 from .provider_http import gemini_generate_content
 from .recent import recent_rows
 from .rules import classify_ai_tags, match_tags
@@ -290,6 +292,8 @@ class NotebookBot:
             self._handle_summarize(chat_id, bot_user_id, text.removeprefix("/summarize").strip())
         elif command == "/digest":
             self._handle_digest(chat_id, bot_user_id, text.removeprefix("/digest").strip())
+        elif command == "/podcast":
+            self._handle_podcast(chat_id, bot_user_id, text.removeprefix("/podcast").strip())
         elif command == "/topics":
             self._handle_topics(chat_id, bot_user_id, text.removeprefix("/topics").strip())
         elif command == "/timeline":
@@ -361,6 +365,7 @@ class NotebookBot:
             "/ask &lt;question&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — ask the AI over your archive\n"
             "/summarize [--source &lt;url&gt;] [--tag &lt;tag&gt;] — summarize a source, tag, or your whole archive\n"
             "/digest [days] — AI recap of recent content (default 7 days)\n"
+            "/podcast [--source &lt;url&gt;] [--tag &lt;tag&gt;] [--collection &lt;name&gt;] — generate an Audio Overview\n"
             "/topics [--source &lt;url&gt;] [--tag &lt;tag&gt;] — cluster your content into topics\n"
             "/timeline [--source &lt;url&gt;] [--tag &lt;tag&gt;] [--day] — browse your archive by date\n"
             "/export [--source &lt;url&gt;] [--tag &lt;tag&gt;] — download a Markdown export\n"
@@ -845,7 +850,8 @@ class NotebookBot:
             self.services.api.send_message(chat_id=chat_id, text="Sorry, I couldn't generate an answer right now. Please try again later.")
             return
 
-        self.services.api.send_message(chat_id=chat_id, text=f"<b>AI Answer:</b>\n\n{answer}")
+        rendered, parse_mode = to_telegram_markdown(f"**AI Answer:**\n\n{answer}")
+        self.services.api.send_message(chat_id=chat_id, text=rendered, parse_mode=parse_mode)
         if results:
             sources_text = "\n".join([f"- {r.channel_title or r.channel_url} ({r.message_url})" for r in results[:3]])
             self.services.api.send_message(chat_id=chat_id, text=f"<b>Sources:</b>\n{sources_text}", disable_web_page_preview=True)
@@ -1014,7 +1020,8 @@ class NotebookBot:
             logger.exception("Summarize failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, "Sorry, I couldn't generate a summary right now. Please try again later.")
             return
-        self.services.api.send_message(chat_id, f"<b>Summary — {scope_label}</b>\n\n{answer}")
+        rendered, parse_mode = to_telegram_markdown(f"**Summary — {scope_label}**\n\n{answer}")
+        self.services.api.send_message(chat_id, rendered, parse_mode=parse_mode)
 
     def _handle_digest(self, chat_id: int, bot_user_id: int, args: str) -> None:
         days = 7
@@ -1057,7 +1064,71 @@ class NotebookBot:
             logger.exception("Digest failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, "Sorry, I couldn't build the digest right now. Please try again later.")
             return
-        self.services.api.send_message(chat_id, f"<b>Digest — {scope_label}</b>\n\n{answer}")
+        rendered, parse_mode = to_telegram_markdown(f"**Digest — {scope_label}**\n\n{answer}")
+        self.services.api.send_message(chat_id, rendered, parse_mode=parse_mode)
+
+    def _handle_podcast(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        """Generate an Audio Overview (podcast) from a scope of the archive."""
+        collection, args = self._extract_collection(args)
+        if collection:
+            items, scope_label = self._collection_items(bot_user_id, collection)
+            if items is None:
+                self.services.api.send_message(chat_id, f"Collection “{html.escape(collection)}” not found.")
+                return
+        else:
+            _, source, tag = self._split_filters(args)
+            items = self.services.repository.summary_items(owner_id=bot_user_id, channel_url=source, tag=tag)
+            scope_label = tag or source or "your whole archive"
+        if not items:
+            self.services.api.send_message(
+                chat_id,
+                "Nothing to turn into a podcast yet. Ingest a channel, forward messages, or check your /sources and /tags.",
+            )
+            return
+
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
+        openai_api_key = self.services.settings.openai_api_key
+        if not (gemini_api_key or openai_api_key):
+            self.services.api.send_message(
+                chat_id,
+                "An Audio Overview needs an LLM key. Connect a Gemini key via /connect (or set OPENAI_API_KEY).",
+            )
+            return
+
+        self.services.api.send_message(
+            chat_id,
+            f"Generating an Audio Overview of {scope_label} ({len(items)} item(s))… this can take a minute.",
+        )
+        source_text = build_podcast_source(scope_label, items)
+        audio_path: Path | None = None
+        try:
+            audio_path = Path(
+                synthesize_podcast(
+                    text=source_text,
+                    gemini_api_key=gemini_api_key,
+                    openai_api_key=openai_api_key,
+                    tts_model=self.services.settings.podcast_tts_model,
+                    llm_model_name=self.services.settings.podcast_llm_model,
+                )
+            )
+            self.services.api.send_audio(
+                chat_id=chat_id,
+                audio_path=audio_path,
+                caption=f"Audio Overview — {html.escape(scope_label)} ({len(items)} item(s))",
+                title=f"Audio Overview — {scope_label}",
+            )
+        except PodcastUnavailable as exc:
+            self.services.api.send_message(chat_id, str(exc))
+        except Exception:
+            logger.exception("Podcast generation failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, "Sorry, I couldn't generate the podcast right now. Please try again later.")
+        finally:
+            if audio_path is not None:
+                try:
+                    audio_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.debug("Could not remove temporary podcast file %s", audio_path)
 
     def _handle_recent(self, chat_id: int, bot_user_id: int, args: str) -> None:
         n = 10
