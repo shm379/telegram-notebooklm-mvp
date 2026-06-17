@@ -18,6 +18,7 @@ from .model_catalog import ModelCatalogService
 from .pipeline import IngestionPipeline
 from .recent import recent_rows
 from .search import SearchService
+from .telegram_backup import count_messages, parse_export, read_export, render_markdown
 from .timeline import build_timeline
 from .transcription import TranscriptionService
 
@@ -321,6 +322,20 @@ INDEX_HTML = """
           <div class="tiny" id="libraryStats" style="margin-top:10px;"></div>
           <div class="results" id="libraryRecent"></div>
         </div>
+
+        <div class="card">
+          <h2>Import Telegram Backup</h2>
+          <p class="tiny">
+            در Telegram Desktop مسیر «Export chat history» را با فرمت
+            <b>Machine-readable JSON</b> بزن، سپس فایل <code>result.json</code> یا
+            <code>.zip</code> آن را اینجا آپلود کن تا قابل جستجو شود و یک نسخه‌ی Markdown بگیری.
+          </p>
+          <label for="backupFile">Backup file (.json / .zip)</label>
+          <input id="backupFile" type="file" accept=".json,.zip,application/json,application/zip" />
+          <button id="importBackupBtn" type="button">Import & Convert</button>
+          <div class="status" id="backupStatus"></div>
+          <div class="tiny" id="backupDownload" style="margin-top:10px;"></div>
+        </div>
       </section>
 
       <div id="brainAnswer" style="display:none; margin-top:20px;" class="card">
@@ -567,10 +582,224 @@ INDEX_HTML = """
         }
       });
 
+      const backupFile = document.getElementById("backupFile");
+      const importBackupBtn = document.getElementById("importBackupBtn");
+      const backupStatus = document.getElementById("backupStatus");
+      const backupDownload = document.getElementById("backupDownload");
+
+      importBackupBtn.addEventListener("click", async () => {
+        const file = backupFile.files && backupFile.files[0];
+        if (!file) {
+          backupStatus.textContent = "اول یک فایل .json یا .zip انتخاب کن.";
+          return;
+        }
+        backupStatus.textContent = "در حال آپلود و پردازش... (ممکن است کمی طول بکشد)";
+        backupDownload.innerHTML = "";
+        try {
+          const data = await fetchJson("/api/backup/import", {
+            method: "POST",
+            headers: {
+              "content-type": "application/octet-stream",
+              "X-Filename": file.name,
+            },
+            body: file,
+          });
+          backupStatus.textContent =
+            `وارد شد: ${data.messages} پیام از ${data.chats} چت. حالا با Search/Ask قابل جستجوست.`;
+          const blob = new Blob([data.markdown || ""], { type: "text/markdown" });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = "telegram-backup.md";
+          link.textContent = "دانلود فایل Markdown";
+          backupDownload.appendChild(link);
+        } catch (error) {
+          backupStatus.textContent = error.message;
+        }
+      });
+
       loadSettings().catch(error => {
         settingsStatus.textContent = error.message;
       });
     </script>
+  </body>
+</html>
+"""
+
+
+LANDING_HTML = """
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Telegram Notebook — حافظه‌ی هوشمند تلگرام شما</title>
+    <meta name="description" content="آرشیو کانال‌ها، چت‌ها و بکاپ‌های تلگرام را به یک حافظه‌ی قابل‌جستجو و قابل‌اتصال به ابزارهای AI تبدیل کن." />
+    <style>
+      :root {
+        --bg: #f6f0e7;
+        --card: rgba(255, 252, 247, 0.9);
+        --ink: #1d1b19;
+        --muted: #6c6257;
+        --accent: #0d7c66;
+        --accent-2: #b45f06;
+        --line: rgba(29, 27, 25, 0.12);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", "Vazirmatn", Tahoma, serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(13,124,102,0.16), transparent 30%),
+          radial-gradient(circle at bottom right, rgba(180,95,6,0.16), transparent 32%),
+          var(--bg);
+      }
+      a { color: var(--accent); text-decoration: none; }
+      .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 72px; }
+      nav {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 8px 0 24px; gap: 12px; flex-wrap: wrap;
+      }
+      .brand { font-weight: 700; font-size: 1.25rem; letter-spacing: -0.02em; }
+      .nav-links { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+      .btn {
+        display: inline-block; padding: 12px 22px; border-radius: 999px;
+        background: linear-gradient(120deg, var(--accent), #0c5d4f);
+        color: white; border: none; cursor: pointer; font: inherit; font-weight: 600;
+      }
+      .btn.secondary { background: linear-gradient(120deg, var(--accent-2), #8a4805); }
+      .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+      .hero { padding: 36px 0 12px; }
+      .hero h1 {
+        margin: 0 0 10px; font-size: clamp(2.2rem, 6vw, 4.4rem);
+        line-height: 1.02; letter-spacing: -0.03em;
+      }
+      .hero p { color: var(--muted); font-size: 1.15rem; line-height: 1.9; max-width: 56ch; }
+      .cta { display: flex; gap: 12px; margin-top: 22px; flex-wrap: wrap; }
+      section.block { margin-top: 56px; }
+      h2 { font-size: clamp(1.5rem, 3vw, 2.2rem); letter-spacing: -0.02em; margin: 0 0 18px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+      .card {
+        backdrop-filter: blur(16px); background: var(--card);
+        border: 1px solid var(--line); border-radius: 22px; padding: 20px;
+        box-shadow: 0 18px 50px rgba(29, 27, 25, 0.08);
+      }
+      .card h3 { margin: 0 0 8px; font-size: 1.2rem; }
+      .card p { color: var(--muted); line-height: 1.8; margin: 0; }
+      .steps { counter-reset: step; display: grid; gap: 14px; }
+      .step { display: flex; gap: 14px; align-items: flex-start; }
+      .step .num {
+        flex: 0 0 auto; width: 38px; height: 38px; border-radius: 50%;
+        display: grid; place-items: center; font-weight: 700; color: white;
+        background: linear-gradient(120deg, var(--accent), #0c5d4f);
+      }
+      .step .num.two { background: linear-gradient(120deg, var(--accent-2), #8a4805); }
+      .panel {
+        background: var(--card); border: 1px solid var(--line); border-radius: 22px;
+        padding: 28px; box-shadow: 0 18px 50px rgba(29, 27, 25, 0.08);
+      }
+      footer { margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); }
+      .muted { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <nav>
+        <div class="brand">📓 Telegram Notebook</div>
+        <div class="nav-links">
+          <a href="#features">امکانات</a>
+          <a href="#how">چطور کار می‌کند</a>
+          <a href="#backup">Import بکاپ</a>
+          <a class="btn ghost" href="/app">ورود به اپ</a>
+        </div>
+      </nav>
+
+      <header class="hero">
+        <h1>تلگرام شما، به یک حافظه‌ی هوشمند تبدیل می‌شود.</h1>
+        <p>
+          کانال‌ها، چت‌ها، پیام‌های فورواردشده و حتی <b>فایل بکاپ تلگرام</b> را وارد کن؛
+          همه به متن قابل‌جستجو تبدیل می‌شوند و می‌توانی مثل یک NotebookLM شخصی از آرشیو
+          خودت سؤال بپرسی — هم از داخل ربات تلگرام، هم از همین وب‌سایت.
+        </p>
+        <div class="cta">
+          <a class="btn" href="/app">شروع از وب‌اپ</a>
+          <a class="btn secondary" href="#backup">Import فایل بکاپ</a>
+        </div>
+      </header>
+
+      <section id="features" class="block">
+        <h2>چه کاری انجام می‌دهد؟</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>🔎 جستجوی معنایی</h3>
+            <p>جستجوی keyword و semantic روی کل آرشیو؛ نتایج همراه با منبع و لینک پیام.</p>
+          </div>
+          <div class="card">
+            <h3>🧠 پرسش و پاسخ (RAG)</h3>
+            <p>مثل NotebookLM از آرشیو خودت سؤال بپرس و پاسخ مستند بگیر.</p>
+          </div>
+          <div class="card">
+            <h3>🗂️ Import بکاپ تلگرام</h3>
+            <p>فایل JSON/ZIP خروجی Telegram Desktop را بده تا قابل‌جستجو شود و Markdown بگیری.</p>
+          </div>
+          <div class="card">
+            <h3>🏷️ تگ و دفترچه</h3>
+            <p>قوانین keyword/AI برای تگ‌گذاری خودکار و گروه‌بندی تگ‌ها زیر یک collection.</p>
+          </div>
+          <div class="card">
+            <h3>📨 Forwarded Inbox</h3>
+            <p>هر پیام/فایل را به ربات فوروارد کن تا ذخیره، پردازش و قابل‌جستجو شود.</p>
+          </div>
+          <div class="card">
+            <h3>🔌 MCP برای ابزارهای AI</h3>
+            <p>آرشیو را به‌صورت read-only به Claude، Cursor و سایر AI clientها وصل کن.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="how" class="block">
+        <h2>چطور کار می‌کند</h2>
+        <div class="steps">
+          <div class="step">
+            <div class="num">۱</div>
+            <div><b>وارد کن.</b> یک کانال را ingest کن، پیام‌ها را فوروارد کن، یا فایل بکاپ تلگرام را آپلود کن.</div>
+          </div>
+          <div class="step">
+            <div class="num two">۲</div>
+            <div><b>پردازش.</b> محتوا به متن تبدیل، chunk و ایندکس می‌شود و با قوانین تو تگ می‌خورد.</div>
+          </div>
+          <div class="step">
+            <div class="num">۳</div>
+            <div><b>بپرس.</b> از وب‌اپ یا ربات تلگرام جستجو کن، سؤال بپرس، خلاصه و timeline بگیر.</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="backup" class="block">
+        <h2>Import فایل بکاپ تلگرام</h2>
+        <div class="panel">
+          <p class="muted" style="line-height:1.9;">
+            در <b>Telegram Desktop</b> به <b>Settings → Advanced → Export Telegram data</b>
+            (یا روی یک چت: <b>Export chat history</b>) برو و فرمت را روی
+            <b>Machine-readable JSON</b> بگذار. سپس فایل <code>result.json</code> یا
+            <code>.zip</code> خروجی را در وب‌اپ آپلود کن. تمام پیام‌ها قابل‌جستجو می‌شوند و
+            یک نسخه‌ی <b>Markdown</b> تحویل می‌گیری.
+          </p>
+          <div class="cta">
+            <a class="btn" href="/app">باز کردن وب‌اپ و آپلود بکاپ</a>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          ساخته‌شده برای تبدیل تلگرام به «حافظه‌ای برای دستیارهای AI».
+          <a href="/app">ورود به اپ</a> ·
+          <a href="https://github.com/shm379/telegram-notebooklm-mvp">سورس روی GitHub</a>
+        </p>
+      </footer>
+    </div>
   </body>
 </html>
 """
@@ -646,6 +875,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/":
+                self._send_html(LANDING_HTML)
+                return
+            if parsed.path in ("/app", "/app/"):
                 self._send_html(INDEX_HTML)
                 return
             if parsed.path == "/api/health":
@@ -702,10 +934,54 @@ class RequestHandler(BaseHTTPRequestHandler):
             logger.exception("GET %s failed", parsed.path)
             self._send_json({"detail": str(exc)}, status=400)
 
+    def _handle_backup_import(self, parsed) -> None:
+        """Ingest an uploaded Telegram backup (raw .json/.zip body) and return Markdown.
+
+        The file arrives as the raw request body with its name in ``X-Filename``
+        (or ``?filename=``), so there is no multipart parsing to do. The backup is
+        ingested into the shared web archive (``WEB_OWNER_ID``) and the response
+        carries import counts plus the Markdown rendering for the client to save.
+        """
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length) if length else b""
+        if not body:
+            self._send_json({"detail": "Empty upload"}, status=400)
+            return
+        filename = self.headers.get("X-Filename") or parse_qs(parsed.query).get("filename", [""])[0]
+        try:
+            chats = parse_export(read_export(body, filename))
+        except Exception as exc:
+            self._send_json({"detail": f"Could not read backup: {exc}"}, status=400)
+            return
+        try:
+            result = asyncio.run(state.pipeline.ingest_backup(owner_id=WEB_OWNER_ID, chats=chats))
+        except Exception as exc:
+            logger.exception("Backup import failed")
+            self._send_json({"detail": str(exc)}, status=400)
+            return
+        self._send_json(
+            {
+                "ok": True,
+                "chats": result["chats"],
+                "messages": result["messages"],
+                "total_messages": count_messages(chats),
+                "markdown": render_markdown(chats),
+            }
+        )
+
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if not self._require_auth():
             return
+
+        if parsed.path == "/api/backup/import":
+            try:
+                self._handle_backup_import(parsed)
+            except Exception as exc:
+                logger.exception("Backup import handler failed")
+                self._send_json({"detail": str(exc)}, status=400)
+            return
+
         try:
             payload = self._read_json()
         except json.JSONDecodeError:
