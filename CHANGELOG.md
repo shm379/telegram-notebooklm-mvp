@@ -16,6 +16,18 @@
 - `tests/test_office.py`: تشخیص نوع، استخراج DOCX (join runها/پاراگراف‌ها)، XLSX (shared/inline/عدد، چند شیت، نبود sharedStrings)، و رد فرمت ناشناخته.
 - `tests/test_inbox_media.py`: routing اسناد Office و orchestration کامل بدون هیچ سرویس.
 
+## 0.3.0 — Notebook feature set (2026-06-17)
+
+جمع‌بندی نسخه: علاوه‌بر هسته‌ی MVP (ingest، transcription، search/ask، Forwarded Inbox، Rule Engine، Import Jobs، MCP)، این موارد اضافه شد:
+
+- زیرساخت: CI (ruff + pytest) روی هر push/PR.
+- سازمان‌دهی: topic clustering (`/topics` با برچسب‌گذاری LLM)، `/timeline`، Collections (`/collection`، و `/summarize`/`/export --collection`)، مدیریت تگ (`/tag rename|delete`).
+- محتوا: پردازش مدیای فورواردشده (transcription + OCR/PDF + استخراج محلی DOCX/XLSX)، قوانین AI (`/rule add-ai`) و auto-tagging opt-in (`/airules`)، auto-forward به کانال آرشیو (`/setarchive`).
+- خروجی/مرور: `/digest`، `/export` (Markdown)، `/stats`، `/recent`، و endpointهای وب `/api/{stats,recent,timeline}` با پنل Library در داشبورد.
+- ابزارهای MCP جدید: `list_topics`، `timeline`، `archive_stats`، `list_recent`.
+
+بدون وابستگی جدید؛ سوییت تست کامل. جزئیات هر مورد در ورودی‌های زیر.
+
 ## Opt-in AI auto-tagging on forwards (2026-06-12)
 
 تکمیل AI rules: اجرای خودکار آن‌ها روی فورواردهای جدید، به‌صورت opt-in.
