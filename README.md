@@ -72,6 +72,8 @@
 - **Export**: `/export` کل آرشیو، یک منبع یا یک تگ را به‌صورت یک فایل Markdown قابل‌دانلود خروجی می‌گیرد
 - **Stats**: `/stats` نمای کلی آرشیو (تعداد آیتم‌ها، منابع، تگ‌ها، نوع مدیا، و بازه‌ی زمانی) را نشان می‌دهد
 - **Collections (Notebooks)**: `/collection` چند تگ را زیر یک نام گروه می‌کند و آیتم‌های مجموعه را نشان می‌دهد
+- **Import بکاپ تلگرام**: فایل *Machine-readable JSON* تلگرام دسکتاپ (`result.json` یا یک `.zip` از پوشه‌ی export) را — هم تک‌چت و هم export کامل اکانت — می‌گیرد، همه‌ی پیام‌ها را قابل‌جستجو می‌کند و یک نسخه‌ی **Markdown** برمی‌گرداند. در ربات کافی است فایل را بفرستید؛ در وب از کارت «Import Telegram Backup» آپلود کنید.
+- **سایت لندینگ + وب‌اپ**: صفحه‌ی معرفی روی `/` و داشبورد کامل (Ingest / Search / Ask / Library / Import بکاپ) روی `/app`
 - **MCP Server (read-only)**: expose کردن آرشیو به ابزارهای AI با JSON-RPC روی stdio (`python -m telegram_notebook.mcp_server`)
 
 ---
@@ -142,6 +144,9 @@ Python Backend
 
 /import <channel_url> [limit]
 صف‌کردن یک import کامل و resumable در background
+
+/backup
+راهنمای import فایل بکاپ تلگرام؛ کافی است فایل result.json یا .zip را برای ربات بفرستید
 
 /jobs
 نمایش وضعیت و پیشرفت jobهای import
@@ -336,6 +341,34 @@ Telegram AI Archive
 
 ---
 
+## Import بکاپ تلگرام (JSON / ZIP)
+
+می‌توانید کل تاریخچه‌ی یک چت یا اکانت را بدون نیاز به `/connect` وارد کنید:
+
+۱. در **Telegram Desktop** به `Settings → Advanced → Export Telegram data` (یا روی یک چت: `Export chat history`) بروید.
+۲. فرمت را روی **Machine-readable JSON** بگذارید (نه HTML).
+۳. خروجی یک فایل `result.json` (یا پوشه‌ای شامل آن به‌همراه مدیا) است؛ می‌توانید پوشه را zip کنید.
+
+سپس:
+
+- **از ربات:** فایل `result.json` یا `.zip` را مستقیماً برای ربات بفرستید. ربات آن را import می‌کند، محتوا را قابل‌جستجو می‌کند و یک نسخه‌ی Markdown برمی‌گرداند. (سقف ۲۰ مگابایت به‌خاطر محدودیت دانلود Bot API؛ برای فایل بزرگ‌تر از وب استفاده کنید.)
+- **از وب:** در `/app` کارت «Import Telegram Backup»، فایل را آپلود کنید. محتوا در آرشیو وب قابل‌جستجو می‌شود و دکمه‌ی دانلود Markdown ظاهر می‌شود.
+
+هر چت به یک منبع مصنوعی `backup://<id>` تبدیل می‌شود و import به‌صورت idempotent است (وارد کردن دوباره‌ی همان فایل چیزی اضافه نمی‌کند).
+
+### API
+
+```bash
+curl -X POST 'http://127.0.0.1:8000/api/backup/import' \
+  -H 'X-Filename: result.json' \
+  -H 'content-type: application/octet-stream' \
+  --data-binary @result.json
+```
+
+پاسخ شامل تعداد چت/پیام واردشده و متن کامل Markdown است. مثل بقیه‌ی API با `WEB_API_TOKEN` (یا loopback) محافظت می‌شود.
+
+---
+
 ## MCP Server
 
 یک **Telegram MCP Server** (read-only) پیاده‌سازی شده تا آرشیو تلگرام کاربر فقط داخل ربات نماند و به ابزارهای AI دیگر (Claude، Cursor، …) وصل شود. با JSON-RPC 2.0 روی stdio کار می‌کند و فقط با کتابخانه‌ی استاندارد نوشته شده (بدون وابستگی جدید).
@@ -438,7 +471,8 @@ python -m telegram_notebook.main
 سپس باز کنید:
 
 ```text
-http://127.0.0.1:8000
+http://127.0.0.1:8000        # صفحه‌ی لندینگ (معرفی)
+http://127.0.0.1:8000/app    # داشبورد: Ingest / Search / Ask / Library / Import بکاپ
 ```
 
 ---

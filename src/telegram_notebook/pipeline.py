@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from .chunking import split_text
@@ -16,6 +17,9 @@ from .office import detect_office_kind, extract_office_text
 from .rules import classify_ai_tags, match_tags
 from .transcription import TranscriptionService
 
+if TYPE_CHECKING:
+    from .telegram_backup import ParsedChat
+
 logger = logging.getLogger(__name__)
 
 # auto_forward(source_label, tags, text, message_url) — push a tagged item to the
@@ -25,6 +29,9 @@ AutoForward = Callable[[str, "set[str]", str, "str | None"], None]
 # Synthetic source that collects messages a user forwards to the bot.
 FORWARDED_INBOX_URL = "inbox://forwarded"
 FORWARDED_INBOX_TITLE = "Forwarded Inbox"
+
+# Synthetic source prefix for chats imported from a Telegram Desktop backup.
+BACKUP_SOURCE_PREFIX = "backup://"
 
 
 @dataclass(slots=True)
@@ -208,6 +215,74 @@ class IngestionPipeline:
         self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=text)
         self._apply_rules(owner_id, media_id, text)
         return True
+
+    async def ingest_backup(
+        self,
+        *,
+        owner_id: int,
+        chats: list[ParsedChat],
+        vertex_config: dict | None = None,
+    ) -> dict[str, int]:
+        """Ingest parsed chats from a Telegram Desktop backup.
+
+        Each chat becomes a synthetic ``backup://<id>`` source and every text
+        message is stored, chunked, embedded and rule-tagged through the same
+        path as ingested channels — so a backup is queryable via /search and
+        /ask immediately. Idempotent: re-importing the same backup stores nothing
+        new (messages are keyed by their in-chat id per source).
+        """
+        total_stored = 0
+        for chat in chats:
+            total_stored += await self._ingest_backup_chat(
+                owner_id=owner_id, chat=chat, vertex_config=vertex_config
+            )
+        return {"chats": len(chats), "messages": total_stored}
+
+    async def _ingest_backup_chat(
+        self, *, owner_id: int, chat: ParsedChat, vertex_config: dict | None = None
+    ) -> int:
+        chat_id = chat.id
+        if chat_id is None:
+            channel_url = f"{BACKUP_SOURCE_PREFIX}{self._channel_storage_name(chat.name or 'chat')}"
+            telegram_id = 0
+        else:
+            channel_url = f"{BACKUP_SOURCE_PREFIX}{chat_id}"
+            telegram_id = chat_id if isinstance(chat_id, int) else 0
+        channel_db_id = self.repository.upsert_channel(
+            owner_id=owner_id,
+            telegram_id=telegram_id,
+            channel_url=channel_url,
+            title=chat.name,
+            username=None,
+        )
+        stored = 0
+        for msg in chat.messages:
+            text = msg.searchable_text
+            if not text:
+                continue
+            message_id = self.repository.create_or_get_message(
+                channel_id=channel_db_id,
+                telegram_message_id=msg.id,
+                message_date=msg.date,
+                message_url=None,
+                caption=msg.sender,
+            )
+            media_id = self.repository.create_or_get_media(
+                message_id=message_id,
+                file_name=msg.sender or "message",
+                file_path="",
+                mime_type="text/plain",
+                media_kind="backup",
+                duration_seconds=None,
+                file_size_bytes=len(text.encode("utf-8")),
+            )
+            if self.repository.media_already_transcribed(media_id):
+                continue
+            await self._process_text_data(media_item_id=media_id, text=text, vertex_config=vertex_config)
+            self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=text)
+            self._apply_rules(owner_id, media_id, text)
+            stored += 1
+        return stored
 
     def _apply_rules(
         self,
