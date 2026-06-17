@@ -1,3 +1,4 @@
+import zipfile
 from pathlib import Path
 
 from telegram_notebook.bot import NotebookBot
@@ -62,6 +63,15 @@ def test_media_route():
     assert NotebookBot._media_route("document", "application/zip") is None
 
 
+def test_media_route_office_documents():
+    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    assert NotebookBot._media_route("document", docx_mime) == "office"
+    # detected by extension even when the mime type is generic/empty
+    assert NotebookBot._media_route("document", "", "report.docx") == "office"
+    assert NotebookBot._media_route("document", "application/octet-stream", "budget.xlsx") == "office"
+    assert NotebookBot._media_route("document", "", "notes.txt") is None
+
+
 # --- orchestration ---
 
 def _download_to(path: Path):
@@ -92,6 +102,25 @@ def test_process_forwarded_media_extracts_image(tmp_path):
     )
     assert out == "OCR result"
     assert ex.calls == [f]
+
+
+def test_process_forwarded_media_extracts_office_without_service(tmp_path):
+    probe = _Probe()
+    f = tmp_path / "report.docx"
+    w_ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    with zipfile.ZipFile(f, "w") as zf:
+        zf.writestr(
+            "word/document.xml",
+            f'<w:document xmlns:w="{w_ns}"><w:body>'
+            f"<w:p><w:r><w:t>Quarterly report</w:t></w:r></w:p>"
+            f"</w:body></w:document>",
+        )
+    msg = {"document": {"file_id": "d1", "file_name": "report.docx", "mime_type": ""}}
+    # No transcription or extraction service is provided — office parsing is local.
+    out = probe._process_forwarded_media(
+        msg, transcription=None, extraction=None, download=_download_to(f)
+    )
+    assert out == "Quarterly report"
 
 
 def test_process_forwarded_media_skips_when_service_disabled(tmp_path):

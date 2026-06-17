@@ -1,5 +1,21 @@
 # Changelog
 
+## DOCX / XLSX extraction for forwarded documents (2026-06-17)
+
+استخراج متن از اسناد Office فورواردشده، به‌صورت محلی و بدون کلید API.
+
+### Behaviour
+- فوروارد یک فایل `.docx` یا `.xlsx` (تشخیص با پسوند یا MIME type) حالا متن آن را استخراج و در inbox قابل‌جستجو ذخیره می‌کند. برخلاف OCR/PDF که به Gemini نیاز دارد، این مسیر **کاملاً محلی** است (هیچ کلید API یا شبکه‌ای لازم نیست).
+
+### Design
+- ماژول خالص `office.py` با `detect_office_kind`، `extract_docx_text`، `extract_xlsx_text` و dispatcher `extract_office_text` — فقط با کتابخانه‌ی استاندارد (`zipfile` + `xml.etree`). تطبیق تگ‌ها روی local-name است تا هر دو واریانت namespace (transitional/strict) پشتیبانی شود.
+- DOCX: متن پاراگراف‌ها (شامل داخل جدول‌ها) با join شدن runها. XLSX: resolve کردن sharedStrings + inline strings + اعداد، با جداکننده‌ی tab/newline و جداسازی شیت‌ها.
+- `NotebookBot._media_route` مسیر جدید `"office"` را برمی‌گرداند و `_process_forwarded_media` آن را بدون نیاز به سرویس/`enabled` اجرا می‌کند.
+
+### Tests
+- `tests/test_office.py`: تشخیص نوع، استخراج DOCX (join runها/پاراگراف‌ها)، XLSX (shared/inline/عدد، چند شیت، نبود sharedStrings)، و رد فرمت ناشناخته.
+- `tests/test_inbox_media.py`: routing اسناد Office و orchestration کامل بدون هیچ سرویس.
+
 ## Opt-in AI auto-tagging on forwards (2026-06-12)
 
 تکمیل AI rules: اجرای خودکار آن‌ها روی فورواردهای جدید، به‌صورت opt-in.
