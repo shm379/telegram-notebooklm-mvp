@@ -815,7 +815,7 @@ def _query_int(query: dict, name: str, *, default: int, lo: int, hi: int) -> int
 
 
 class RequestHandler(BaseHTTPRequestHandler):
-    server_version = "TelegramNotebook/0.2"
+    server_version = "TelegramNotebook/0.3"
 
     def _read_json(self) -> dict[str, object]:
         length = int(self.headers.get("Content-Length", "0"))
