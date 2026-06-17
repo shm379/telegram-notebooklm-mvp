@@ -27,6 +27,7 @@ from .recent import recent_rows
 from .rules import classify_ai_tags, match_tags
 from .search import SearchService
 from .stats import format_stats
+from .telegram_backup import count_messages, parse_export, read_export, render_markdown
 from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
 from .timeline import build_timeline
 from .transcription import TranscriptionService
@@ -222,6 +223,11 @@ class NotebookBot:
             self._handle_forwarded(chat_id, bot_user_id, message)
             return
 
+        document = message.get("document")
+        if isinstance(document, dict) and self._is_backup_document(document):
+            self._handle_backup_document(chat_id, bot_user_id, document)
+            return
+
         if not text:
             return
 
@@ -300,6 +306,8 @@ class NotebookBot:
             self._handle_ingest(chat_id, bot_user_id, text.removeprefix("/ingest").strip())
         elif command == "/import":
             self._handle_import(chat_id, bot_user_id, text.removeprefix("/import").strip())
+        elif command == "/backup":
+            self._handle_backup_info(chat_id)
         elif command == "/jobs":
             self._handle_jobs(chat_id, bot_user_id)
         elif command == "/canceljob":
@@ -343,6 +351,7 @@ class NotebookBot:
                 "Welcome! I'm your AI Research Assistant.\n"
                 "Use /connect to link your account and configure Vertex AI.\n"
                 "Forward me any message to save it to your searchable inbox.\n"
+                "Send me a Telegram backup (.json/.zip) to import it — see /backup.\n"
                 "Send /help to see all commands."
             ),
         )
@@ -355,6 +364,7 @@ class NotebookBot:
             "/disconnect — remove your saved session and credentials\n"
             "/ingest &lt;channel_url&gt; — index a channel now (quick, inline)\n"
             "/import &lt;channel_url&gt; [limit] — queue a full, resumable import\n"
+            "/backup — how to import a Telegram Desktop backup (.json/.zip)\n"
             "/jobs — show your import jobs and progress\n"
             "/canceljob &lt;id&gt; — cancel a queued/running import\n"
             "/search &lt;query&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — keyword/semantic search\n"
@@ -1491,6 +1501,113 @@ class NotebookBot:
         except Exception as e:
             logger.exception("Ingest failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, f"Error: {e}")
+
+    # --- Telegram Desktop backup import ------------------------------------
+
+    @staticmethod
+    def _is_backup_document(document: dict) -> bool:
+        """True for an uploaded ``.json``/``.zip`` that looks like a Telegram export."""
+        name = (document.get("file_name") or "").lower()
+        if name.endswith((".json", ".zip")):
+            return True
+        mime = (document.get("mime_type") or "").lower()
+        return mime in (
+            "application/json",
+            "application/zip",
+            "application/x-zip-compressed",
+            "application/x-zip",
+        )
+
+    def _handle_backup_info(self, chat_id: int) -> None:
+        self.services.api.send_message(
+            chat_id,
+            "<b>Import a Telegram backup</b>\n"
+            "In Telegram Desktop: ⋮ → <b>Export chat history</b> → format "
+            "<b>Machine-readable JSON</b>. Then just send me the resulting "
+            "<code>result.json</code> (or a <code>.zip</code> of the export) as a file.\n\n"
+            "I'll make every message searchable (use /search and /ask) and send you "
+            "back a Markdown copy. Files up to 20 MB work here; for bigger exports, "
+            "use the website importer.",
+        )
+
+    def _handle_backup_document(self, chat_id: int, bot_user_id: int, document: dict) -> None:
+        file_id = document.get("file_id")
+        file_name = document.get("file_name") or "backup"
+        size = int(document.get("file_size") or 0)
+        if not file_id:
+            self.services.api.send_message(chat_id, "I couldn't read that file.")
+            return
+        if size and size > 20 * 1024 * 1024:
+            self.services.api.send_message(
+                chat_id,
+                "That backup is larger than 20 MB — the bot's download limit. "
+                "Please import it from the website, or export a smaller date range.",
+            )
+            return
+
+        self.services.api.send_message(chat_id, "Reading your Telegram backup…")
+        tmpdir = Path(tempfile.mkdtemp(prefix="backup_"))
+        try:
+            meta = self.services.api.get_file(file_id)
+            file_path = meta.get("file_path")
+            if not file_path:
+                self.services.api.send_message(chat_id, "I couldn't download the file from Telegram.")
+                return
+            local = self.services.api.download_file(str(file_path), tmpdir / file_name)
+            chats = parse_export(read_export(local.read_bytes(), file_name))
+        except Exception as exc:
+            logger.exception("Backup parse failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, f"I couldn't read that backup: {exc}")
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return
+
+        total = count_messages(chats)
+        if not total:
+            self.services.api.send_message(chat_id, "That backup had no messages I could import.")
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return
+
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        self.services.api.send_message(
+            chat_id, f"Importing {total} message(s) from {len(chats)} chat(s)… this can take a moment."
+        )
+
+        async def _do():
+            pipeline = IngestionPipeline(
+                settings=self.services.settings,
+                repository=self.services.repository,
+                transcription=self._transcription_service_for_user(user),
+                embeddings=self._embedding_service_for_user(user),
+                ai_classifier=self._ai_classifier_for_user(user),
+            )
+            return await pipeline.ingest_backup(
+                owner_id=bot_user_id, chats=chats, vertex_config=self._vertex_ingest_config(user)
+            )
+
+        try:
+            result = self._async_to_sync(_do(), timeout=1800)
+        except Exception as exc:
+            logger.exception("Backup ingest failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, f"Import failed: {exc}")
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return
+
+        self.services.api.send_message(
+            chat_id,
+            f"Imported {result['messages']} message(s) from {result['chats']} chat(s) into your "
+            "searchable archive. Use /search or /ask to query it.",
+        )
+        try:
+            md_path = tmpdir / "telegram-backup.md"
+            md_path.write_text(render_markdown(chats), encoding="utf-8")
+            self.services.api.send_document(
+                chat_id=chat_id, document_path=md_path,
+                caption=f"Markdown of your backup ({total} message(s))",
+            )
+        except Exception:
+            logger.exception("Backup markdown send failed for user %s", bot_user_id)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _handle_callback(self, callback: dict) -> None:
         pass
