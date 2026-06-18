@@ -349,6 +349,20 @@ INDEX_HTML = """
         </div>
 
         <div class="card">
+          <h2>Import Telegram Backup</h2>
+          <p class="tiny">
+            در Telegram Desktop مسیر «Export chat history» را با فرمت
+            <b>Machine-readable JSON</b> بزن، سپس فایل <code>result.json</code> یا
+            <code>.zip</code> آن را اینجا آپلود کن تا قابل جستجو شود و یک نسخه‌ی Markdown بگیری.
+          </p>
+          <label for="backupFile">Backup file (.json / .zip)</label>
+          <input id="backupFile" type="file" accept=".json,.zip,application/json,application/zip" />
+          <button id="importBackupBtn" type="button">Import & Convert</button>
+          <div class="status" id="backupStatus"></div>
+          <div class="tiny" id="backupDownload" style="margin-top:10px;"></div>
+        </div>
+
+        <div class="card">
           <h2>Telegram Toolset</h2>
           <p class="tiny">Acts on the server's connected account (TELEGRAM_SESSION_STRING).</p>
           <div style="display:flex; gap:10px; flex-wrap:wrap;">
@@ -612,6 +626,42 @@ INDEX_HTML = """
           libraryStatus.textContent = "";
         } catch (error) {
           libraryStatus.textContent = error.message;
+        }
+      });
+
+      const backupFile = document.getElementById("backupFile");
+      const importBackupBtn = document.getElementById("importBackupBtn");
+      const backupStatus = document.getElementById("backupStatus");
+      const backupDownload = document.getElementById("backupDownload");
+
+      importBackupBtn.addEventListener("click", async () => {
+        const file = backupFile.files && backupFile.files[0];
+        if (!file) {
+          backupStatus.textContent = "اول یک فایل .json یا .zip انتخاب کن.";
+          return;
+        }
+        backupStatus.textContent = "در حال آپلود و پردازش... (ممکن است کمی طول بکشد)";
+        backupDownload.innerHTML = "";
+        try {
+          const data = await fetchJson("/api/backup/import", {
+            method: "POST",
+            headers: {
+              "content-type": "application/octet-stream",
+              "X-Filename": file.name,
+            },
+            body: file,
+          });
+          backupStatus.textContent =
+            `وارد شد: ${data.messages} پیام از ${data.chats} چت. حالا با Search/Ask قابل جستجوست.`;
+          const blob = new Blob([data.markdown || ""], { type: "text/markdown" });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = "telegram-backup.md";
+          link.textContent = "دانلود فایل Markdown";
+          backupDownload.appendChild(link);
+        } catch (error) {
+          backupStatus.textContent = error.message;
         }
       });
 

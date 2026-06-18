@@ -33,7 +33,12 @@ from .rules import classify_ai_tags, match_tags
 from .search import SearchService
 from .stats import format_stats
 from .telegram_backup import count_messages, parse_export, read_export, render_markdown
-from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
+from .telegram_client import (
+    build_client_from_session_string,
+    request_login_code,
+    sign_in_with_code,
+    sign_in_with_password,
+)
 from .timeline import build_timeline
 from .transcription import TranscriptionService
 
