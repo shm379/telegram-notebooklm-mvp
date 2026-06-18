@@ -15,11 +15,20 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from .office import detect_office_kind, extract_office_bytes
+
+logger = logging.getLogger(__name__)
+
 ZIP_MAGIC = b"PK\x03\x04"
+
+# Resolve an export-relative attachment path (e.g. "files/report.docx") to its bytes.
+FileResolver = Callable[[str], "bytes | None"]
 
 
 @dataclass(slots=True)
@@ -31,11 +40,14 @@ class ParsedMessage:
     media_label: str | None = None
     forwarded_from: str | None = None
     reply_to: int | None = None
+    document_text: str = ""  # text extracted from an attached DOCX/XLSX, if any
 
     @property
     def searchable_text(self) -> str:
-        """Media tag + text, mirroring how the Forwarded Inbox stores items."""
-        return "\n".join(part for part in (self.media_label, self.text) if part).strip()
+        """Media tag + text + extracted document text, mirroring the Forwarded Inbox."""
+        return "\n".join(
+            part for part in (self.media_label, self.text, self.document_text) if part
+        ).strip()
 
 
 @dataclass(slots=True)
@@ -92,17 +104,22 @@ def _read_result_json_from_zip(data: bytes) -> bytes:
 # --- parsing ---------------------------------------------------------------
 
 
-def parse_export(data: dict) -> list[ParsedChat]:
-    """Normalize a single-chat or full-account export into ``ParsedChat`` list."""
+def parse_export(data: dict, *, file_resolver: FileResolver | None = None) -> list[ParsedChat]:
+    """Normalize a single-chat or full-account export into ``ParsedChat`` list.
+
+    When ``file_resolver`` is supplied (e.g. built from the export zip via
+    ``make_zip_file_resolver``), attached DOCX/XLSX documents are extracted to text
+    locally and folded into each message's searchable content.
+    """
     if not isinstance(data, dict):
         raise ValueError("Telegram export must be a JSON object.")
     if isinstance(data.get("messages"), list):
-        return [_parse_chat(data)]
+        return [_parse_chat(data, file_resolver)]
     chats = data.get("chats")
     if isinstance(chats, dict) and isinstance(chats.get("list"), list):
-        return [_parse_chat(c) for c in chats["list"] if isinstance(c, dict)]
+        return [_parse_chat(c, file_resolver) for c in chats["list"] if isinstance(c, dict)]
     if isinstance(chats, list):
-        return [_parse_chat(c) for c in chats if isinstance(c, dict)]
+        return [_parse_chat(c, file_resolver) for c in chats if isinstance(c, dict)]
     raise ValueError(
         "Unrecognized Telegram export. Expected a chat export (with 'messages') "
         "or a full export (with 'chats.list'). Export as 'Machine-readable JSON' "
@@ -110,17 +127,17 @@ def parse_export(data: dict) -> list[ParsedChat]:
     )
 
 
-def _parse_chat(raw: dict) -> ParsedChat:
+def _parse_chat(raw: dict, file_resolver: FileResolver | None = None) -> ParsedChat:
     messages: list[ParsedMessage] = []
     for item in raw.get("messages", []) or []:
-        parsed = _parse_message(item)
+        parsed = _parse_message(item, file_resolver)
         if parsed is not None:
             messages.append(parsed)
     name = (raw.get("name") or "").strip() or "Telegram chat"
     return ParsedChat(name=name, type=raw.get("type"), id=raw.get("id"), messages=messages)
 
 
-def _parse_message(raw: object) -> ParsedMessage | None:
+def _parse_message(raw: object, file_resolver: FileResolver | None = None) -> ParsedMessage | None:
     if not isinstance(raw, dict):
         return None
     if raw.get("type") == "service":  # joined/pinned/etc. — no real content to index
@@ -138,7 +155,68 @@ def _parse_message(raw: object) -> ParsedMessage | None:
         media_label=media_label(raw),
         forwarded_from=(raw.get("forwarded_from") or None),
         reply_to=reply_to if isinstance(reply_to, int) else None,
+        document_text=_attached_document_text(raw, file_resolver),
     )
+
+
+def _attached_document_text(raw: dict, file_resolver: FileResolver | None) -> str:
+    """Extract text from an attached DOCX/XLSX file, if the export bundled it.
+
+    Only office documents are handled here (parsed locally, no key needed); PDFs and
+    images would need the Gemini extractor and are left as a media label only.
+    """
+    if file_resolver is None:
+        return ""
+    file_path = raw.get("file")
+    if not isinstance(file_path, str) or not file_path:
+        return ""
+    kind = detect_office_kind(raw.get("file_name") or file_path, raw.get("mime_type"))
+    if not kind:
+        return ""
+    blob = file_resolver(file_path)
+    if not blob:
+        return ""
+    try:
+        return extract_office_bytes(blob, kind).strip()
+    except Exception:
+        logger.exception("Failed to extract backup document %s", file_path)
+        return ""
+
+
+def make_zip_file_resolver(data: bytes) -> FileResolver | None:
+    """Build a resolver that reads attachment bytes out of an export ``.zip``.
+
+    Returns None when ``data`` is not a zip. Export JSON references files by a path
+    relative to the export root (e.g. ``files/doc.docx``), but a zipped folder may
+    prefix entries with the folder name, so matching falls back to suffix/basename.
+    """
+    if data[:4] != ZIP_MAGIC:
+        return None
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        return None
+    names = archive.namelist()
+
+    def resolve(rel_path: str) -> bytes | None:
+        rel = rel_path.replace("\\", "/").lstrip("/")
+        for name in names:
+            if name == rel or name.endswith("/" + rel):
+                return _safe_read(archive, name)
+        base = rel.rsplit("/", 1)[-1]
+        for name in names:
+            if name.rsplit("/", 1)[-1] == base:
+                return _safe_read(archive, name)
+        return None
+
+    return resolve
+
+
+def _safe_read(archive: zipfile.ZipFile, name: str) -> bytes | None:
+    try:
+        return archive.read(name)
+    except (KeyError, zipfile.BadZipFile):
+        return None
 
 
 def message_text(raw: dict) -> str:
@@ -247,5 +325,7 @@ def render_markdown(chats: list[ParsedChat], *, generated_at: str | None = None)
                 lines.append(msg.media_label)
             if msg.text:
                 lines.append(msg.text)
+            if msg.document_text:
+                lines.append(f"> {msg.document_text.replace(chr(10), chr(10) + '> ')}")
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"

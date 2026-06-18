@@ -1,5 +1,21 @@
 # Changelog
 
+## DOCX / XLSX extraction from Telegram backup attachments (2026-06-18)
+
+استخراج محتوای اسناد ضمیمه‌ی بکاپ تلگرام، به‌صورت محلی و بدون کلید API.
+
+### Behaviour
+- وقتی یک بکاپ به‌صورت `.zip` (همراه با مدیا) import می‌شود، اسناد **DOCX/XLSX** ضمیمه‌شده به پیام‌ها به‌صورت محلی استخراج و در متن قابل‌جستجو و در خروجی Markdown گنجانده می‌شوند. قبلاً فقط یک برچسب `[file: …]` ذخیره می‌شد. PDF/عکس همچنان فقط label می‌مانند (نیازمند Gemini).
+- بدون `.zip` (فقط `result.json`) یا بدون ضمیمه، رفتار بدون تغییر است.
+
+### Design
+- `office.extract_office_bytes(data, kind)` استخراج را مستقیم از bytes انجام می‌دهد (extractorهای DOCX/XLSX حالا file-like هم می‌پذیرند).
+- `telegram_backup`: تابع `make_zip_file_resolver(data)` یک resolver از مسیر نسبی ضمیمه به bytes داخل zip می‌سازد (تطبیق exact/suffix/basename). `parse_export(..., file_resolver=...)` آن را به هر پیام می‌رساند؛ `ParsedMessage.document_text` به `searchable_text` و Markdown اضافه شد.
+- هر دو call site (bot و web) resolver را از همان bytes آپلودشده می‌سازند.
+
+### Tests
+- `tests/test_backup_documents.py`: `extract_office_bytes`، resolver (non-zip/suffix/basename)، استخراج DOCX از export zip، سازگاری بدون resolver، رد فرمت غیر-office، Markdown، و e2e از طریق `ingest_backup` (DOCX + XLSX قابل‌جستجو).
+
 ## Media + auto-forward in full channel imports, dashboard timeline (2026-06-17)
 
 تکمیل چند follow-up باقی‌مانده در یک تغییر: پردازش مدیا و auto-forward روی import کامل کانال، نمایش timeline در داشبورد، و یک تست end-to-end برای کل مسیر Telethon.

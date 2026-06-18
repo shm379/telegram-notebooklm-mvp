@@ -20,7 +20,13 @@ from .model_catalog import ModelCatalogService
 from .pipeline import IngestionPipeline
 from .recent import recent_rows
 from .search import SearchService
-from .telegram_backup import count_messages, parse_export, read_export, render_markdown
+from .telegram_backup import (
+    count_messages,
+    make_zip_file_resolver,
+    parse_export,
+    read_export,
+    render_markdown,
+)
 from .timeline import build_timeline
 from .transcription import TranscriptionService
 
@@ -1110,7 +1116,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         filename = self.headers.get("X-Filename") or parse_qs(parsed.query).get("filename", [""])[0]
         try:
-            chats = parse_export(read_export(body, filename))
+            chats = parse_export(read_export(body, filename), file_resolver=make_zip_file_resolver(body))
         except Exception as exc:
             self._send_json({"detail": f"Could not read backup: {exc}"}, status=400)
             return

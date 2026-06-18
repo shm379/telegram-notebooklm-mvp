@@ -13,8 +13,10 @@ extractors tolerate both the transitional and strict OOXML namespace variants.
 
 from __future__ import annotations
 
+import io
 import zipfile
 from pathlib import Path
+from typing import IO
 from xml.etree import ElementTree as ET
 
 DOCX_EXTENSIONS = {".docx"}
@@ -39,8 +41,12 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def extract_docx_text(path: Path) -> str:
-    """Extract paragraph text (including text inside tables) from a .docx file."""
+def extract_docx_text(path: Path | IO[bytes]) -> str:
+    """Extract paragraph text (including text inside tables) from a .docx file.
+
+    ``path`` may be a filesystem path or a binary file object (anything
+    ``zipfile.ZipFile`` accepts), so callers can extract straight from bytes.
+    """
     with zipfile.ZipFile(path) as zf:
         with zf.open("word/document.xml") as handle:
             root = ET.parse(handle).getroot()
@@ -87,8 +93,11 @@ def _cell_text(cell: ET.Element, shared: list[str]) -> str:
     return value.text if (value is not None and value.text is not None) else ""
 
 
-def extract_xlsx_text(path: Path) -> str:
-    """Extract cell values from every worksheet as tab/newline-separated text."""
+def extract_xlsx_text(path: Path | IO[bytes]) -> str:
+    """Extract cell values from every worksheet as tab/newline-separated text.
+
+    Accepts a filesystem path or a binary file object.
+    """
     with zipfile.ZipFile(path) as zf:
         shared = _read_shared_strings(zf)
         sheet_names = sorted(
@@ -121,3 +130,16 @@ def extract_office_text(path: Path, kind: str | None = None) -> str:
     if kind == "xlsx":
         return extract_xlsx_text(path)
     raise ValueError(f"Unsupported office document: {path.name}")
+
+
+def extract_office_bytes(data: bytes, kind: str) -> str:
+    """Extract DOCX/XLSX text straight from in-memory bytes (e.g. a backup zip).
+
+    ``kind`` must be ``"docx"`` or ``"xlsx"`` — there is no filename to infer from.
+    """
+    buffer = io.BytesIO(data)
+    if kind == "docx":
+        return extract_docx_text(buffer)
+    if kind == "xlsx":
+        return extract_xlsx_text(buffer)
+    raise ValueError(f"Unsupported office document kind: {kind!r}")
