@@ -1,34 +1,43 @@
 # Changelog
 
-**Languages / زبان‌ها:** [English](CHANGELOG.md) · [فارسی](CHANGELOG.fa.md) · [العربية](CHANGELOG.ar.md) · [Español](CHANGELOG.es.md) · [简体中文](CHANGELOG.zh.md)
+## Telegram Toolset: account / scheduled / resend / llm-export / deleted (2026-06-17)
 
-## DOCX / XLSX extraction for forwarded documents (2026-06-17)
-
-Text extraction from forwarded Office documents, performed locally and without an API key.
+پورت کامل پنج ماژول [uburuntu/Telegram-Toolset](https://github.com/uburuntu/Telegram-Toolset) به ربات و سایت، روی اکانت connect‌شده.
 
 ### Behaviour
-- Forwarding a `.docx` or `.xlsx` file (detected by extension or MIME type) now extracts its text and stores it in a searchable inbox. Unlike OCR/PDF, which requires Gemini, this path is **fully local** (no API key or network needed).
+- **`/account`** — اطلاعات اکانت تلگرامِ لینک‌شده.
+- **`/scheduled <chat> [cancel <id>]`** — نمایش و لغو پیام‌های زمان‌بندی‌شده‌ی یک چت.
+- **`/llmexport <chat> [limit]`** — خروجی یک چت به‌صورت transcript مارک‌داون دوست‌دار AI (فایل `.md`).
+- **`/resend <target> <text>`** — ارسال پیام از طرف اکانت کاربر به یک مقصد.
+- **`/watchdeleted on|off` + `/deleted [n]`** — بازیابی پیام‌های حذف‌شده با یک watcher همیشه‌روشنِ opt-in. چون تلگرام API بازیابی حذف‌های گذشته ندارد، watcher پیام‌های ورودی را cache و هنگام حذف، نسخه‌ی ذخیره‌شده را surface می‌کند؛ **فقط پیام‌های بعد از فعال‌سازی** قابل بازیابی‌اند.
+- **سایت:** کارت «Telegram Toolset» در داشبورد + endpointهای `/api/account`، `/api/scheduled`، `/api/deleted`، `/api/llmexport`، `/api/resend` (روی اکانت سرور؛ watcher وب با `WEB_WATCH_DELETED=1`).
 
 ### Design
-- A pure `office.py` module with `detect_office_kind`, `extract_docx_text`, `extract_xlsx_text`, and the `extract_office_text` dispatcher — using only the standard library (`zipfile` + `xml.etree`). Tag matching is done on the local-name so that both namespace variants (transitional/strict) are supported.
-- DOCX: paragraph text (including inside tables) by joining runs. XLSX: resolving sharedStrings + inline strings + numbers, with tab/newline separators and sheet separation.
-- `NotebookBot._media_route` returns the new `"office"` route, and `_process_forwarded_media` runs it without needing a service or `enabled`.
+- `toolset.py`: wrapperهای async تلتون (account_info / list_scheduled / cancel_scheduled / resend_text / fetch_chat_messages) + formatter/builderهای خالصِ قابل‌تست (format_account / format_scheduled / build_llm_export).
+- `deleted_watcher.py`: `recover_deleted` (منطق خالص cache→recovered) و `DeletedWatcherManager` (یک thread/loop و کلاینت Telethon per-user با هندلرهای `NewMessage`/`MessageDeleted`؛ شروع خودکار در boot، toggle امن، و مقاوم در برابر race توقف زودهنگام).
+- DB: جداول idempotent `cached_messages` و `recovered_deleted`، ستون `watch_deleted` روی `bot_users`، و متدهای `cache_message`/`take_cached`/`add_recovered`/`list_recovered`/`set_watch_deleted`/`list_watch_deleted_owners`.
+- کلاینت‌ها on-demand ساخته می‌شوند (مثل `/ingest`)؛ خطاها بلعیده و log می‌شوند تا ربات crash نکند.
 
 ### Tests
-- `tests/test_office.py`: type detection, DOCX extraction (joining runs/paragraphs), XLSX (shared/inline/number, multiple sheets, missing sharedStrings), and rejection of an unknown format.
-- `tests/test_inbox_media.py`: routing of Office documents and full orchestration without any service.
+- `tests/test_toolset.py`، `tests/test_deleted_watcher.py`، `tests/test_toolset_handlers.py` — formatterها/builderها، منطق cache/recover و migrationها، lifecycle منیجر (با کلاینت fake)، و orchestration هندلرها با FakeClient/FakeApi. کل مجموعه ۱۸۹ تست سبز.
 
-## 0.3.0 — Notebook feature set (2026-06-17)
+## Audio Overview (podcast) + safe Markdown rendering (2026-06-17)
 
-Release summary: in addition to the MVP core (ingest, transcription, search/ask, Forwarded Inbox, Rule Engine, Import Jobs, MCP), the following was added:
+دو قابلیت از مقایسه با پروژه‌های مشابه: تبدیل آرشیو به پادکست (شکاف امضای NotebookLM) و رندر درست خروجی AI در تلگرام.
 
-- Infrastructure: CI (ruff + pytest) on every push/PR.
-- Organization: topic clustering (`/topics` with LLM labeling), `/timeline`, Collections (`/collection`, plus `/summarize`/`/export --collection`), tag management (`/tag rename|delete`).
-- Content: forwarded media processing (transcription + OCR/PDF + local DOCX/XLSX extraction), AI rules (`/rule add-ai`) and opt-in auto-tagging (`/airules`), auto-forward to an archive channel (`/setarchive`).
-- Output/review: `/digest`, `/export` (Markdown), `/stats`, `/recent`, and the web endpoints `/api/{stats,recent,timeline}` with a Library panel in the dashboard.
-- New MCP tools: `list_topics`, `timeline`, `archive_stats`, `list_recent`.
+### Behaviour
+- **`/podcast [--source <url>] [--tag <tag>] [--collection <name>]`**: یک Audio Overview (پادکست گفتگوی صوتی) از کل آرشیو، یک منبع، یک تگ، یا یک collection می‌سازد و فایل صوتی را ارسال می‌کند. با [Podcastfy](https://github.com/souzatharsis/podcastfy)؛ وابستگی سنگین است و به‌صورت extra اختیاری نصب می‌شود (`pip install ".[podcast]"`). در نبود extra، پیام راهنمای نصب می‌دهد (بدون crash). نیازمند کلید LLM (Gemini کاربر یا OpenAI).
+- خروجی markdown دستیار در `/ask`، `/summarize` و `/digest` حالا با [telegramify-markdown](https://github.com/sudoskys/telegramify-markdown) به **MarkdownV2** امن تبدیل می‌شود؛ این هم فرمت (bold/لیست/کد) را درست رندر می‌کند و هم باگ شکستن پیام با کاراکترهای `<`/`&` در حالت `parse_mode=HTML` را رفع می‌کند.
 
-No new dependencies; full test suite. Details of each item are in the entries below.
+### Design
+- ماژول جدید `formatting.py` با `to_telegram_markdown(text) -> (rendered, parse_mode)`؛ import کتابخانه guarded و تبدیل wrap‌شده تا نبود dependency یا payload خراب هیچ‌وقت تحویل پیام را crash نکند (fallback به متن ساده).
+- ماژول جدید `podcast.py`: `build_podcast_source` (تابع خالص روی همان item dictهای `summary_items`) و `synthesize_podcast` (import تنبل Podcastfy، انتخاب TTS/LLM و کلیدها از env). `PodcastUnavailable` برای نبود extra.
+- `TelegramBotApi.send_message` پارامتر `parse_mode` گرفت (پیش‌فرض `HTML`، سازگار با قبل)؛ متد جدید `send_audio` (sendAudio).
+- تنظیمات `PODCAST_TTS_MODEL` (پیش‌فرض `edge`، بدون کلید) و `PODCAST_LLM_MODEL` به `Settings` اضافه شد.
+
+### Tests
+- `tests/test_formatting.py`: حفظ محتوا، و fallback هنگام نبود کتابخانه یا خطای تبدیل.
+- `tests/test_podcast.py`: ساختار/cap/truncate در `build_podcast_source`، و هندلر `/podcast` (ارسال صوت + پاک‌سازی فایل، پیام نبود extra، نبود کلید LLM، آرشیو خالی).
 
 ## Opt-in AI auto-tagging on forwards (2026-06-12)
 

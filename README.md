@@ -46,38 +46,36 @@ The answer should come with the source, the message link, and the related texts.
 
 ---
 
-## Current MVP status
+## وضعیت فعلی MVP
 
-In the current version, the project has these capabilities:
+در نسخه فعلی، پروژه این قابلیت‌ها را دارد:
 
-- Receiving a Telegram channel link and reading messages with `Telethon`
-- Downloading and processing text, audio, and video messages
-- Extracting audio from video with `ffmpeg`
-- Transcribing audio/video with OpenAI or Gemini
-- Chunking texts
-- Building embeddings for semantic search
-- Keyword + semantic search
-- Initial RAG-based answer generation from the search results
-- A lightweight web dashboard with `Python http.server`
-- A Telegram bot for orchestration and the core commands
-- Connecting the user's real Telegram account via a session string through Telethon
-- **Forwarded Inbox**: forwarding any message to the bot stores its text/caption in the user's personal, searchable inbox
-- **Forwarded media processing**: audio/video/voice files are transcribed automatically and photos/PDFs are converted to searchable text via OCR (Gemini). DOCX/XLSX files are also extracted locally (no API key and no network)
-- **Rule Engine + Tags**: defining keyword→tag rules, automatic tagging of incoming content, and filtering `/search` and `/ask` with `--tag`
-- **AI rules**: `/rule add-ai` with a natural-language criterion (matched by an LLM), and `/airules` for opt-in automatic tagging on new forwards
-- **Tag management and browsing**: `/tag rename|delete`, `/recent` for the latest items, and the web endpoints `/api/{stats,recent,timeline}` + a Library panel in the dashboard
-- **Auto-forward to an archive channel**: with `/setarchive`, any message you forward that matches a tag rule is also forwarded automatically to your archive channel
-- **Import Jobs**: full channel import in the background with a queue, progress tracking, resume after interruption, and the ability to cancel
-- **Summarization (NotebookLM)**: `/summarize` for building a structured summary of the entire archive, a specific source, or a tag
-- **Digest**: `/digest [days]` builds an AI summary of recent content (7 days by default)
-- **Topic clustering**: `/topics` clusters the archive content by topic offline (over the existing embeddings); if a Gemini key is present, each cluster's label is built with an LLM (otherwise from the most frequent terms)
-- **Timeline**: `/timeline` groups the archive by date (month or day) — the temporal complement to `/topics`
-- **Export**: `/export` exports the entire archive, a single source, or a single tag as a downloadable Markdown file
-- **Stats**: `/stats` shows an archive overview (item, source, tag counts, media types, and time range)
-- **Collections (Notebooks)**: `/collection` groups multiple tags under a single name and shows the collection's items
-- **Telegram backup import**: takes Telegram Desktop's *Machine-readable JSON* file (`result.json` or a `.zip` of the export folder) — both single-chat and full-account exports — makes all messages searchable, and returns a **Markdown** copy. In the bot, just send the file; on the web, upload it from the "Import Telegram Backup" card.
-- **Landing site + web app**: an introductory page at `/` and a full dashboard (Ingest / Search / Ask / Library / Backup import) at `/app`
-- **MCP Server (read-only)**: exposing the archive to AI tools with JSON-RPC over stdio (`python -m telegram_notebook.mcp_server`)
+- دریافت لینک کانال تلگرام و خواندن پیام‌ها با `Telethon`
+- دانلود و پردازش پیام‌های متنی، صوتی و ویدیویی
+- استخراج صوت از ویدیو با `ffmpeg`
+- تبدیل صوت/ویدیو به متن با OpenAI یا Gemini
+- chunk کردن متن‌ها
+- ساخت embedding برای جستجوی معنایی
+- جستجوی keyword + semantic search
+- پاسخ‌سازی اولیه با RAG از روی نتایج جستجو
+- داشبورد وب سبک با `Python http.server`
+- ربات تلگرام برای orchestration و دستورات اصلی
+- اتصال اکانت واقعی تلگرام کاربر با session string از طریق Telethon
+- **Forwarded Inbox**: فوروارد هر پیام به ربات، متن/کپشن آن را در inbox شخصی و قابل‌جستجوی کاربر ذخیره می‌کند
+- **پردازش مدیای فورواردشده**: فایل صوتی/ویدیو/voice به‌صورت خودکار transcribe و عکس/PDF با OCR (Gemini) به متن قابل‌جستجو تبدیل می‌شوند
+- **Rule Engine + Tags**: تعریف قانون keyword→tag، تگ‌گذاری خودکار محتوای واردشده، و فیلتر `/search` و `/ask` با `--tag`
+- **Auto-forward به کانال آرشیو**: با `/setarchive`، هر پیامی که فوروارد می‌کنید و با یک قانون tag مطابقت دارد، به‌صورت خودکار به کانال آرشیو شما هم فوروارد می‌شود
+- **Import Jobs**: import کامل کانال در background با صف، progress tracking، resume بعد از قطع‌شدن، و امکان لغو
+- **خلاصه‌سازی (NotebookLM)**: `/summarize` برای ساخت خلاصه‌ی ساختارمند از کل آرشیو، یک منبع خاص، یا یک تگ
+- **Digest**: `/digest [days]` خلاصه‌ی AI از محتوای اخیر (پیش‌فرض ۷ روز) را می‌سازد
+- **Audio Overview (Podcast)**: `/podcast` با الهام از NotebookLM، یک پادکست گفتگوی صوتی از کل آرشیو، یک منبع، یک تگ یا یک collection می‌سازد (با [Podcastfy](https://github.com/souzatharsis/podcastfy)؛ به‌صورت extra اختیاری)
+- **Topic clustering**: `/topics` محتوای آرشیو را به‌صورت آفلاین (روی embeddingهای موجود) خوشه‌بندی موضوعی می‌کند؛ در صورت وجود کلید Gemini، برچسب هر خوشه با LLM ساخته می‌شود (وگرنه از پرتکرارترین واژه‌ها)
+- **Timeline**: `/timeline` آرشیو را بر اساس تاریخ (ماه یا روز) گروه‌بندی می‌کند — مکمل زمانیِ `/topics`
+- **Export**: `/export` کل آرشیو، یک منبع یا یک تگ را به‌صورت یک فایل Markdown قابل‌دانلود خروجی می‌گیرد
+- **Stats**: `/stats` نمای کلی آرشیو (تعداد آیتم‌ها، منابع، تگ‌ها، نوع مدیا، و بازه‌ی زمانی) را نشان می‌دهد
+- **Collections (Notebooks)**: `/collection` چند تگ را زیر یک نام گروه می‌کند و آیتم‌های مجموعه را نشان می‌دهد
+- **MCP Server (read-only)**: expose کردن آرشیو به ابزارهای AI با JSON-RPC روی stdio (`python -m telegram_notebook.mcp_server`)
+- **Telegram Toolset** (الهام از [uburuntu/Telegram-Toolset](https://github.com/uburuntu/Telegram-Toolset)؛ روی اکانت connect‌شده): `/account` (اطلاعات اکانت)، `/scheduled` (لیست/لغو پیام‌های زمان‌بندی‌شده)، `/llmexport` (خروجی AI-friendly از یک چت)، `/resend` (ارسال به‌جای کاربر)، و `/watchdeleted` + `/deleted` (بازیابی پیام‌های حذف‌شده با watcher همیشه‌روشن opt-in). همه‌ی این‌ها در سایت هم به‌صورت کارت «Telegram Toolset» و endpointهای `/api/account`، `/api/scheduled`، `/api/deleted`، `/api/llmexport`، `/api/resend` در دسترس‌اند.
 
 ---
 
@@ -181,6 +179,9 @@ Summarize the entire archive, a source, or a tag
 /digest [days]
 AI summary of recent content (default 7 days)
 
+/podcast [--source <url>] [--tag <tag>] [--collection <name>]
+ساخت Audio Overview (پادکست) از کل آرشیو، یک منبع، یک تگ یا یک collection
+
 /topics [--source <url>] [--tag <tag>]
 Topic clustering of the content
 
@@ -235,6 +236,24 @@ Group multiple tags under a "notebook" and show its items
 
 /setarchive <@channel | off>
 Set the archive channel; tagged forwards are sent to it automatically
+
+/account
+نمایش اطلاعات اکانت تلگرامِ connect‌شده
+
+/scheduled <chat> [cancel <id>]
+نمایش (یا لغو) پیام‌های زمان‌بندی‌شده‌ی یک چت
+
+/llmexport <chat> [limit]
+خروجی گرفتن یک چت به‌صورت transcript مارک‌داون دوست‌دار AI
+
+/resend <target> <text>
+ارسال یک پیام از طرف اکانت شما به یک مقصد
+
+/watchdeleted on|off
+روشن/خاموش‌کردن watcher بازیابی پیام‌های حذف‌شده (فقط پیام‌های بعد از فعال‌سازی)
+
+/deleted [n]
+نمایش پیام‌های حذف‌شده‌ای که اخیراً بازیابی شده‌اند
 
 /cancel
 Cancel the current flow
@@ -403,7 +422,52 @@ All tools are read-only; sensitive tools (import, forward, delete, create_rule) 
 
 ---
 
-## Development and testing
+## Audio Overview (Podcast)
+
+قابلیت امضای NotebookLM یعنی «Audio Overview»: تبدیل آرشیو به یک پادکست گفتگوی صوتی. این کار با کتابخانه‌ی [Podcastfy](https://github.com/souzatharsis/podcastfy) انجام می‌شود و چون وابستگی سنگینی دارد، به‌صورت **extra اختیاری** نصب می‌شود:
+
+```bash
+pip install ".[podcast]"
+```
+
+سپس در ربات:
+
+```text
+/podcast                      # کل آرشیو
+/podcast --tag "AI Tools"     # فقط یک تگ
+/podcast --source https://t.me/example_channel
+/podcast --collection myNotebook
+```
+
+- موتور TTS با `PODCAST_TTS_MODEL` انتخاب می‌شود: `edge` (رایگان و بدون کلید، پیش‌فرض)، یا `openai`/`gemini`/`elevenlabs` (با کلید provider مربوطه).
+- LLM که متن گفتگو را می‌نویسد به‌صورت پیش‌فرض از کلید Gemini کاربر (یا `GEMINI_API_KEY`) استفاده می‌کند؛ در نبود آن از OpenAI. با `PODCAST_LLM_MODEL` قابل override است.
+- اگر extra نصب نشده باشد، `/podcast` پیام راهنمای نصب می‌دهد (به‌جای crash).
+- خروجی markdown دستیار (`/ask`، `/summarize`، `/digest`، …) حالا با [telegramify-markdown](https://github.com/sudoskys/telegramify-markdown) به MarkdownV2 امن تبدیل می‌شود تا فرمت درست رندر شود و کاراکترهای خاص پیام را نشکنند.
+
+---
+
+## Telegram Toolset
+
+پنج ماژول [uburuntu/Telegram-Toolset](https://github.com/uburuntu/Telegram-Toolset) به ربات و سایت پورت شده‌اند. این قابلیت‌ها روی **اکانت کاربرِ connect‌شده** کار می‌کنند (در ربات per-user با `/connect`؛ در سایت روی اکانت سرور یعنی `TELEGRAM_SESSION_STRING`).
+
+| ماژول | ربات | سایت |
+|---|---|---|
+| account-info | `/account` | `GET /api/account` + کارت |
+| scheduled | `/scheduled <chat> [cancel <id>]` | `GET /api/scheduled?peer=` + کارت |
+| llm-export | `/llmexport <chat> [limit]` | `POST /api/llmexport` (دانلود `.md`) |
+| resend | `/resend <target> <text>` | `POST /api/resend` |
+| export-deleted | `/watchdeleted on|off` + `/deleted [n]` | `GET /api/deleted` + watcher با `WEB_WATCH_DELETED=1` |
+
+### نکته‌ی مهم درباره‌ی بازیابی پیام حذف‌شده
+تلگرام **API‌ای برای گرفتن پیام‌های قبلاً حذف‌شده ندارد**. این قابلیت یک **watcher همیشه‌روشنِ opt-in** است که هر پیام ورودی را cache می‌کند و وقتی تلگرام رویداد حذف می‌فرستد، نسخه‌ی cache‌شده را بازیابی می‌کند. بنابراین:
+
+- فقط پیام‌هایی را بازیابی می‌کند که **بعد از فعال‌سازی** دریافت شده باشند — حذف‌های گذشته قابل بازیابی نیستند.
+- نیازمند یک کلاینت Telethon دائمی per-user است (در ربات با `/watchdeleted on`؛ در سایت با `WEB_WATCH_DELETED=1`).
+- از نظر حریم خصوصی سنگین است (متن همه‌ی پیام‌های ورودی ذخیره می‌شود)؛ با `/watchdeleted off` متوقف می‌شود.
+
+---
+
+## توسعه و تست
 
 CI runs lint and tests on every push and PR (`.github/workflows/ci.yml`). To run locally:
 

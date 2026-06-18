@@ -219,6 +219,33 @@ class Repository:
                         PRIMARY KEY (collection_id, tag)
                     )
                 """)
+                # Live cache of incoming messages for the deleted-message watcher.
+                # Only populated while a user has /watchdeleted ON.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS cached_messages (
+                        owner_id INTEGER,
+                        chat_id INTEGER,
+                        message_id INTEGER,
+                        chat_title TEXT,
+                        sender TEXT,
+                        text TEXT,
+                        message_date TEXT,
+                        PRIMARY KEY (owner_id, chat_id, message_id)
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS recovered_deleted (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER,
+                        chat_id INTEGER,
+                        message_id INTEGER,
+                        chat_title TEXT,
+                        sender TEXT,
+                        text TEXT,
+                        message_date TEXT,
+                        deleted_at TEXT
+                    )
+                """)
                 self._ensure_channel_owner(conn)
                 self._ensure_bot_user_columns(conn)
                 self._ensure_rule_columns(conn)
@@ -232,6 +259,8 @@ class Repository:
             conn.execute("ALTER TABLE bot_users ADD COLUMN archive_chat_id TEXT")
         if "ai_autotag" not in cols:
             conn.execute("ALTER TABLE bot_users ADD COLUMN ai_autotag INTEGER DEFAULT 0")
+        if "watch_deleted" not in cols:
+            conn.execute("ALTER TABLE bot_users ADD COLUMN watch_deleted INTEGER DEFAULT 0")
 
     @staticmethod
     def _ensure_rule_columns(conn: sqlite3.Connection) -> None:
@@ -471,6 +500,107 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                     "UPDATE bot_users SET ai_autotag = ? WHERE bot_user_id = ?",
                     (1 if enabled else 0, bot_user_id),
                 )
+
+    def set_watch_deleted(self, *, bot_user_id: int, enabled: bool) -> None:
+        """Toggle the always-on deleted-message watcher for a user."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "UPDATE bot_users SET watch_deleted = ? WHERE bot_user_id = ?",
+                    (1 if enabled else 0, bot_user_id),
+                )
+
+    def list_watch_deleted_owners(self) -> list[dict[str, Any]]:
+        """Connected users who opted into the deleted-message watcher (decrypted)."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT * FROM bot_users WHERE watch_deleted = 1 AND session_string IS NOT NULL AND session_string != ''"
+                ).fetchall()
+        owners = []
+        for r in rows:
+            d = _decrypt_row(dict(r), _BOT_USER_SECRETS)
+            if d and d.get("session_string"):
+                owners.append(d)
+        return owners
+
+    def cache_message(
+        self,
+        *,
+        owner_id: int,
+        chat_id: int | None,
+        message_id: int,
+        chat_title: str | None,
+        sender: str | None,
+        text: str | None,
+        message_date: str | None,
+    ) -> None:
+        """Store one incoming message so it can be recovered if later deleted."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO cached_messages
+                        (owner_id, chat_id, message_id, chat_title, sender, text, message_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (owner_id, chat_id, message_id, chat_title, sender, text, message_date),
+                )
+
+    def take_cached(self, *, owner_id: int, message_ids: list[int], chat_id: int | None = None) -> list[dict[str, Any]]:
+        """Fetch + remove cached messages matching ``message_ids`` (optionally a chat).
+
+        Returned rows are the cached copies of messages that were just deleted.
+        """
+        if not message_ids:
+            return []
+        placeholders = ", ".join("?" for _ in message_ids)
+        params: list[Any] = [owner_id, *message_ids]
+        where = f"owner_id = ? AND message_id IN ({placeholders})"
+        if chat_id is not None:
+            where += " AND chat_id = ?"
+            params.append(chat_id)
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = [dict(r) for r in conn.execute(f"SELECT * FROM cached_messages WHERE {where}", params).fetchall()]
+                if rows:
+                    conn.execute(f"DELETE FROM cached_messages WHERE {where}", params)
+                return rows
+
+    def add_recovered(self, *, owner_id: int, rows: list[dict[str, Any]], deleted_at: str) -> int:
+        """Persist recovered (deleted) messages. Returns how many were stored."""
+        if not rows:
+            return 0
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.executemany(
+                    """
+                    INSERT INTO recovered_deleted
+                        (owner_id, chat_id, message_id, chat_title, sender, text, message_date, deleted_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            owner_id, r.get("chat_id"), r.get("message_id"), r.get("chat_title"),
+                            r.get("sender"), r.get("text"), r.get("message_date"), deleted_at,
+                        )
+                        for r in rows
+                    ],
+                )
+        return len(rows)
+
+    def list_recovered(self, *, owner_id: int, limit: int = 20) -> list[dict[str, Any]]:
+        """Most-recently recovered deleted messages for a user (newest first)."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT * FROM recovered_deleted WHERE owner_id = ? ORDER BY id DESC LIMIT ?",
+                    (owner_id, limit),
+                ).fetchall()
+                return [dict(r) for r in rows]
 
     def set_archive_chat(self, *, bot_user_id: int, archive_chat_id: str | None) -> None:
         """Set (or clear, when ``None``) the channel/chat that tagged forwards are auto-forwarded to."""
