@@ -11,6 +11,9 @@ from .chunking import split_text
 from .config import Settings
 from .db import Repository
 from .embeddings import EmbeddingService
+from .extraction import ExtractionService
+from .media import route_media
+from .office import detect_office_kind, extract_office_text
 from .rules import classify_ai_tags, match_tags
 from .transcription import TranscriptionService
 
@@ -18,6 +21,10 @@ if TYPE_CHECKING:
     from .telegram_backup import ParsedChat
 
 logger = logging.getLogger(__name__)
+
+# auto_forward(source_label, tags, text, message_url) — push a tagged item to the
+# user's archive channel. Wired only when the user has an archive configured.
+AutoForward = Callable[[str, "set[str]", str, "str | None"], None]
 
 # Synthetic source that collects messages a user forwards to the bot.
 FORWARDED_INBOX_URL = "inbox://forwarded"
@@ -44,16 +51,24 @@ class IngestionPipeline:
         repository: Repository,
         transcription: TranscriptionService | None,
         embeddings: EmbeddingService,
+        extraction: ExtractionService | None = None,
         ai_classifier: Callable[[str], str] | None = None,
+        auto_forward: AutoForward | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
         self.transcription = transcription
         self.embeddings = embeddings
+        # OCR/PDF extractor (Gemini). When set, channel imports also turn images and
+        # PDFs into searchable text; DOCX/XLSX are always parsed locally.
+        self.extraction = extraction
         # When provided, AI-kind rules are evaluated with this LLM callable during
         # auto-tagging. Only the forwarded-inbox path wires it in (and only when the
         # user opted in), so bulk channel imports never trigger per-item LLM calls.
         self.ai_classifier = ai_classifier
+        # When set, each newly tagged item is also forwarded to the user's archive
+        # channel. Threaded through _apply_rules so it fires for channel imports too.
+        self.auto_forward = auto_forward
 
     async def ingest_channel(
         self,
@@ -68,6 +83,7 @@ class IngestionPipeline:
         resume_from: int = 0,
         progress_cb=None,
         should_cancel=None,
+        client: object | None = None,
     ) -> IngestStats:
         from .telegram_client import (
             build_client,
@@ -76,15 +92,19 @@ class IngestionPipeline:
             iter_all_messages,
         )
 
-        if session_string is None:
-            client = build_client(self.settings)
-        else:
-            client = build_client_from_session_string(
-                self.settings,
-                session_string,
-                api_id=api_id,
-                api_hash=api_hash,
-            )
+        # ``client`` is injectable so the whole import path (download + extraction +
+        # tagging + auto-forward) can be exercised end-to-end with a fake Telethon
+        # client, with no network or real session.
+        if client is None:
+            if session_string is None:
+                client = build_client(self.settings)
+            else:
+                client = build_client_from_session_string(
+                    self.settings,
+                    session_string,
+                    api_id=api_id,
+                    api_hash=api_hash,
+                )
         async with client:
             channel = await fetch_channel_info(client, channel_url)
             channel_id = self.repository.upsert_channel(
@@ -98,6 +118,7 @@ class IngestionPipeline:
                 channel_url=channel.canonical_url,
                 channel_title=channel.title,
             )
+            label = channel.title or channel.canonical_url
 
             messages = await iter_all_messages(
                 client, channel_url=channel_url, limit=limit, min_id=resume_from
@@ -118,10 +139,14 @@ class IngestionPipeline:
                     caption=msg.caption,
                 )
 
-                if msg.media_kind == "text" and msg.caption:
-                    await self._process_text_message(owner_id, message_id, msg.caption, vertex_config)
-                    stats.processed_media += 1
-                elif msg.media_kind in {"audio", "video"}:
+                if msg.media_kind == "text":
+                    if msg.caption:
+                        await self._process_text_message(
+                            owner_id, message_id, msg.caption, vertex_config,
+                            source_label=label, message_url=msg.message_url,
+                        )
+                        stats.processed_media += 1
+                else:
                     processed = await self._process_media_message(
                         owner_id=owner_id,
                         client=client,
@@ -129,6 +154,8 @@ class IngestionPipeline:
                         message_id=message_id,
                         media_message=msg,
                         vertex_config=vertex_config,
+                        source_label=label,
+                        message_url=msg.message_url,
                     )
                     if processed:
                         stats.processed_media += 1
@@ -257,11 +284,22 @@ class IngestionPipeline:
             stored += 1
         return stored
 
-    def _apply_rules(self, owner_id: int, media_item_id: int, text: str) -> None:
+    def _apply_rules(
+        self,
+        owner_id: int,
+        media_item_id: int,
+        text: str,
+        *,
+        source_label: str | None = None,
+        message_url: str | None = None,
+    ) -> None:
         """Auto-tag a stored item by matching the owner's rules against its text.
 
         Keyword rules always run; AI-kind rules only run when an ``ai_classifier``
-        was supplied (the opt-in forwarded-inbox path).
+        was supplied (the opt-in forwarded-inbox path). When a ``source_label`` is
+        given and an ``auto_forward`` callback is configured, every newly tagged item
+        is also pushed to the user's archive channel (used by channel imports; the
+        forwarded-inbox path forwards from the bot layer instead).
         """
         rules = self.repository.list_rules(owner_id=owner_id)
         if not rules:
@@ -276,8 +314,22 @@ class IngestionPipeline:
                     logger.exception("AI auto-tagging failed for owner %s", owner_id)
         if tags:
             self.repository.tag_media(owner_id=owner_id, media_item_id=media_item_id, tags=tags)
+            if self.auto_forward is not None and source_label is not None:
+                try:
+                    self.auto_forward(source_label, tags, text, message_url)
+                except Exception:
+                    logger.exception("Auto-forward failed for owner %s", owner_id)
 
-    async def _process_text_message(self, owner_id: int, message_id: int, text: str, vertex_config: dict | None = None) -> None:
+    async def _process_text_message(
+        self,
+        owner_id: int,
+        message_id: int,
+        text: str,
+        vertex_config: dict | None = None,
+        *,
+        source_label: str | None = None,
+        message_url: str | None = None,
+    ) -> None:
         media_id = self.repository.create_or_get_media(
             message_id=message_id,
             file_name="text_message",
@@ -291,7 +343,7 @@ class IngestionPipeline:
             return
         await self._process_text_data(media_id, text, vertex_config)
         self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=text)
-        self._apply_rules(owner_id, media_id, text)
+        self._apply_rules(owner_id, media_id, text, source_label=source_label, message_url=message_url)
 
     async def _process_media_message(
         self,
@@ -302,8 +354,41 @@ class IngestionPipeline:
         message_id: int,
         media_message: object,
         vertex_config: dict | None = None,
+        source_label: str | None = None,
+        message_url: str | None = None,
     ) -> bool:
+        """Download a channel media item and turn it into searchable text.
+
+        Routing mirrors the forwarded inbox: audio/video are transcribed, images and
+        PDFs are OCR'd (Gemini), and DOCX/XLSX are parsed locally. When no extractor
+        is available for the file (no key, or unsupported type), the message's caption
+        is still indexed on its own so nothing is silently dropped.
+        """
         from .telegram_client import download_message_media
+
+        caption = (media_message.caption or "").strip()
+        route = route_media(media_message.media_kind, media_message.mime_type, media_message.file_name)
+
+        # Nothing extractable from the file itself: index the caption if present,
+        # without spending a download.
+        if not (route and self._route_enabled(route)):
+            if not caption:
+                return False
+            media_id = self.repository.create_or_get_media(
+                message_id=message_id,
+                file_name=media_message.file_name or "media",
+                file_path="",
+                mime_type=media_message.mime_type,
+                media_kind=media_message.media_kind,
+                duration_seconds=media_message.duration_seconds,
+                file_size_bytes=media_message.file_size_bytes,
+            )
+            if self.repository.media_already_transcribed(media_id):
+                return True
+            await self._process_text_data(media_item_id=media_id, text=caption, vertex_config=vertex_config)
+            self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=caption)
+            self._apply_rules(owner_id, media_id, caption, source_label=source_label, message_url=message_url)
+            return True
 
         channel_name = self._channel_storage_name(channel_url)
         download_dir = self.settings.media_dir / channel_name / str(media_message.telegram_message_id)
@@ -327,21 +412,40 @@ class IngestionPipeline:
         if self.repository.media_already_transcribed(media_id):
             return True
 
-        transcript_text = ""
-        if self.transcription and self.transcription.enabled:
-            try:
-                transcript_text = self.transcription.transcribe_media(downloaded_path, download_dir)
-            except Exception as exc:
-                self.repository.mark_media_failed(media_item_id=media_id, error=str(exc))
+        extracted_text = ""
+        try:
+            extracted_text = self._extract_media_text(route, downloaded_path, download_dir, media_message)
+        except Exception as exc:
+            self.repository.mark_media_failed(media_item_id=media_id, error=str(exc))
 
-        combined_text = self._combine_text_parts(transcript_text, media_message.caption)
+        combined_text = self._combine_text_parts(extracted_text, media_message.caption)
         if not combined_text:
             return False
 
         await self._process_text_data(media_item_id=media_id, text=combined_text, vertex_config=vertex_config)
         self.repository.mark_media_transcribed(media_item_id=media_id, transcript_text=combined_text)
-        self._apply_rules(owner_id, media_id, combined_text)
+        self._apply_rules(owner_id, media_id, combined_text, source_label=source_label, message_url=message_url)
         return True
+
+    def _route_enabled(self, route: str) -> bool:
+        """Whether the extractor for ``route`` can run (office needs no key/service)."""
+        if route == "transcribe":
+            return bool(self.transcription and self.transcription.enabled)
+        if route == "extract":
+            return bool(self.extraction and self.extraction.enabled)
+        if route == "office":
+            return True
+        return False
+
+    def _extract_media_text(self, route: str, path, work_dir, media_message) -> str:
+        if route == "transcribe":
+            return self.transcription.transcribe_media(path, work_dir) or ""
+        if route == "extract":
+            return self.extraction.extract(path) or ""
+        if route == "office":
+            kind = detect_office_kind(media_message.file_name, media_message.mime_type)
+            return extract_office_text(path, kind) or ""
+        return ""
 
     async def _process_text_data(self, media_item_id: int, text: str, vertex_config: dict | None = None) -> None:
         chunks = split_text(

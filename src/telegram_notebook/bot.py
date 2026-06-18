@@ -24,6 +24,7 @@ from .extraction import ExtractionService
 from .formatting import to_telegram_markdown
 from .jobs import JobWorker
 from .logging_config import setup_logging
+from .media import route_media
 from .office import detect_office_kind, extract_office_text
 from .pipeline import IngestionPipeline
 from .podcast import PodcastUnavailable, build_podcast_source, synthesize_podcast
@@ -693,22 +694,24 @@ class NotebookBot:
                 return {"file_id": sizes[-1].get("file_id"), "kind": "photo", "file_name": "photo.jpg", "mime_type": "image/jpeg"}
         return None
 
-    @staticmethod
-    def _media_route(kind: str, mime_type: str | None, file_name: str | None = None) -> str | None:
-        """Which processor handles a media kind: 'transcribe', 'extract', 'office', or None."""
-        if kind in ("voice", "audio", "video", "video_note"):
-            return "transcribe"
-        mt = (mime_type or "").lower()
-        if kind == "photo":
-            return "extract"
-        if kind == "document":
-            if detect_office_kind(file_name, mime_type):
-                return "office"  # DOCX/XLSX: extracted locally, no API key needed
-            if mt == "application/pdf" or mt.startswith("image/"):
-                return "extract"
-            if mt.startswith(("audio/", "video/")):
-                return "transcribe"
-        return None
+    # Telegram Bot API media kinds -> the normalized kinds understood by route_media.
+    _BOT_MEDIA_KINDS = {
+        "voice": "audio",
+        "audio": "audio",
+        "video": "video",
+        "video_note": "video",
+        "photo": "image",
+        "document": "document",
+    }
+
+    @classmethod
+    def _media_route(cls, kind: str, mime_type: str | None, file_name: str | None = None) -> str | None:
+        """Which processor handles a forwarded media kind: 'transcribe', 'extract', 'office', or None.
+
+        Normalizes the Bot API kind and defers to the shared ``route_media`` so the
+        forwarded inbox and full channel imports route media identically.
+        """
+        return route_media(cls._BOT_MEDIA_KINDS.get(kind), mime_type, file_name)
 
     def _process_forwarded_media(self, message: dict, *, transcription, extraction, download) -> str | None:
         """Download the forward's media and turn it into text (transcript or OCR).
@@ -856,6 +859,20 @@ class NotebookBot:
         except Exception:
             logger.exception("Auto-forward to archive failed for user %s", user.get("bot_user_id") if user else None)
             return False
+
+    def _make_auto_forward(self, user: dict | None):
+        """Build a pipeline auto-forward callback, or None when no archive is set.
+
+        Lets channel imports push each tagged item to the user's archive channel,
+        reusing the same formatting/escaping as the forwarded-inbox path.
+        """
+        if not (user and user.get("archive_chat_id")):
+            return None
+
+        def _forward(label: str, tags: set[str], text: str, message_url: str | None) -> None:
+            self._auto_forward(user=user, label=label, tags=tags, text=text, message_url=message_url)
+
+        return _forward
 
     def _search(self, chat_id: int, bot_user_id: int, query: str, source: str | None, tag: str | None = None) -> None:
         if not query:
@@ -1768,6 +1785,8 @@ class NotebookBot:
             repository=self.services.repository,
             transcription=self._transcription_service_for_user(user),
             embeddings=self._embedding_service_for_user(user),
+            extraction=self._extraction_service_for_user(user),
+            auto_forward=self._make_auto_forward(user),
         )
 
         async def _do():
@@ -1818,6 +1837,8 @@ class NotebookBot:
                 repository=self.services.repository,
                 transcription=self._transcription_service_for_user(user),
                 embeddings=self._embedding_service_for_user(user),
+                extraction=self._extraction_service_for_user(user),
+                auto_forward=self._make_auto_forward(user),
             )
             stats = await pipeline.ingest_channel(
                 owner_id=bot_user_id,

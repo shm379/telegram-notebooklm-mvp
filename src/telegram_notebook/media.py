@@ -5,6 +5,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .office import detect_office_kind
+
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav", ".ogg", ".oga", ".opus", ".aac", ".flac"}
 MAX_TRANSCRIBE_BYTES = 24 * 1024 * 1024
@@ -17,6 +19,33 @@ def detect_media_kind(file_name: str | None, mime_type: str | None) -> str | Non
         return "video"
     if suffix in AUDIO_EXTENSIONS or (mime_type and mime_type.startswith("audio/")):
         return "audio"
+    return None
+
+
+def route_media(media_kind: str | None, mime_type: str | None, file_name: str | None = None) -> str | None:
+    """How to turn a media item into text: 'transcribe', 'extract', 'office', or None.
+
+    Shared by the forwarded-inbox path (Telegram Bot API) and full channel imports
+    (Telethon) so both decide identically:
+      - audio/video                -> 'transcribe' (needs a transcription key)
+      - images                     -> 'extract'    (Gemini OCR, needs a Gemini key)
+      - documents: DOCX/XLSX       -> 'office'      (parsed locally, no key)
+                   PDF / image mime -> 'extract'
+                   audio/video mime -> 'transcribe'
+                   anything else    -> None (only the caption, if any, is indexed)
+    """
+    if media_kind in ("audio", "video"):
+        return "transcribe"
+    if media_kind == "image":
+        return "extract"
+    if media_kind == "document":
+        if detect_office_kind(file_name, mime_type):
+            return "office"
+        mt = (mime_type or "").lower()
+        if mt == "application/pdf" or mt.startswith("image/"):
+            return "extract"
+        if mt.startswith(("audio/", "video/")):
+            return "transcribe"
     return None
 
 

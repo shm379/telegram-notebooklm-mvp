@@ -62,9 +62,11 @@ The answer should come with the source, the message link, and the related texts.
 - ربات تلگرام برای orchestration و دستورات اصلی
 - اتصال اکانت واقعی تلگرام کاربر با session string از طریق Telethon
 - **Forwarded Inbox**: فوروارد هر پیام به ربات، متن/کپشن آن را در inbox شخصی و قابل‌جستجوی کاربر ذخیره می‌کند
+- **پردازش مدیای فورواردشده**: فایل صوتی/ویدیو/voice به‌صورت خودکار transcribe و عکس/PDF با OCR (Gemini) به متن قابل‌جستجو تبدیل می‌شوند. فایل‌های DOCX/XLSX هم به‌صورت محلی (بدون کلید API و بدون شبکه) استخراج می‌شوند
+- **پردازش مدیا در import کامل کانال**: همان مسیر روی import کانال هم اجرا می‌شود — صوت/ویدیو transcribe، عکس/PDF با OCR، و DOCX/XLSX به‌صورت محلی استخراج می‌شوند (نه فقط متن/کپشن)
 - **پردازش مدیای فورواردشده**: فایل صوتی/ویدیو/voice به‌صورت خودکار transcribe و عکس/PDF با OCR (Gemini) به متن قابل‌جستجو تبدیل می‌شوند
 - **Rule Engine + Tags**: تعریف قانون keyword→tag، تگ‌گذاری خودکار محتوای واردشده، و فیلتر `/search` و `/ask` با `--tag`
-- **Auto-forward به کانال آرشیو**: با `/setarchive`، هر پیامی که فوروارد می‌کنید و با یک قانون tag مطابقت دارد، به‌صورت خودکار به کانال آرشیو شما هم فوروارد می‌شود
+- **Auto-forward به کانال آرشیو**: با `/setarchive`، هر پیامی که فوروارد می‌کنید یا از import کانال می‌آید و با یک قانون tag مطابقت دارد، به‌صورت خودکار به کانال آرشیو شما هم فوروارد می‌شود
 - **Import Jobs**: import کامل کانال در background با صف، progress tracking، resume بعد از قطع‌شدن، و امکان لغو
 - **خلاصه‌سازی (NotebookLM)**: `/summarize` برای ساخت خلاصه‌ی ساختارمند از کل آرشیو، یک منبع خاص، یا یک تگ
 - **Digest**: `/digest [days]` خلاصه‌ی AI از محتوای اخیر (پیش‌فرض ۷ روز) را می‌سازد
@@ -359,6 +361,7 @@ Because of the LLM cost, AI rules run only during `/rule apply` (one LLM call pe
 
 In addition to `/rule apply`, AI rules also run automatically on every new forward with `/airules on` (opt-in, one LLM call per item; bulk channel imports are never auto-classified).
 
+**اضافه‌شده:** auto-forward و دانلود/پردازش مدیا (OCR/transcription/DOCX-XLSX) حالا روی import کامل کانال هم اجرا می‌شوند — نه فقط مسیر Forwarded Inbox.
 **Not yet added (follow-up):** auto-forward for channel imports (for now, only the Forwarded Inbox path) and downloading/processing media within the full channel import.
 
 ---
@@ -554,6 +557,15 @@ python -m telegram_notebook.bot
 
 ## Current limitations
 
+- جداسازی داده بین کاربران انجام شده است (هر کاربر فقط دیتای خودش را می‌بیند؛ مالکیت با `owner_id` روی کانال‌ها اعمال می‌شود).
+- احراز هویت Web API با `WEB_API_TOKEN` و رمزنگاری secrets در دیتابیس با `SECRETS_KEY` اضافه شده؛ برای production هر دو متغیر را تنظیم کنید.
+- storage فعلی برای MVP مناسب است، نه دیتاست بزرگ.
+- session string و API keyها باید قبل از production رمزنگاری شوند.
+- import کامل کانال با صف، progress و resume از طریق `/import` پشتیبانی می‌شود (یک worker در background)؛ هنوز یک sandbox تست برای کل مسیر Telethon وجود ندارد.
+- پردازش مدیا در هر دو مسیر یکسان است: صوت/ویدیو/voice با transcription، عکس/PDF با OCR (Gemini multimodal)، و DOCX/XLSX با استخراج محلی (zipfile + XML، بدون کلید API). این پردازش هم روی Forwarded Inbox و هم روی import کامل کانال انجام می‌شود (routing مشترک در `media.route_media`).
+- Rule Engine بر اساس تطبیق keyword (substring) است؛ قوانین AI-based و forward خودکار به کانال آرشیو هنوز اضافه نشده.
+- `/topics` خوشه‌بندی موضوعی را روی embeddingهای موجود انجام می‌دهد (greedy cosine، آفلاین)؛ نیازمند آن است که محتوا با کلید embedding ایندکس شده باشد. برچسب خوشه‌ها در صورت وجود کلید Gemini با LLM ساخته می‌شود و در غیر این صورت به پرتکرارترین واژه‌ها برمی‌گردد. `/timeline` نمای زمانی (ماه/روز) را روی تاریخ پیام‌ها می‌سازد.
+- برای دیتاست بزرگ بهتر است به PostgreSQL + pgvector یا Qdrant مهاجرت شود.
 - Data isolation between users is in place (each user sees only their own data; ownership is enforced via `owner_id` on channels).
 - Web API authentication with `WEB_API_TOKEN` and encryption of secrets in the database with `SECRETS_KEY` have been added; set both variables for production.
 - The current storage is suitable for the MVP, not a large dataset.
