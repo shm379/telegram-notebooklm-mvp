@@ -51,12 +51,11 @@ class TelegramBotApi:
         text: str,
         reply_markup: dict[str, object] | None = None,
         disable_web_page_preview: bool | None = None,
+        parse_mode: str | None = "HTML",
     ) -> None:
-        payload: dict[str, object] = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML"
-        }
+        payload: dict[str, object] = {"chat_id": chat_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
         if disable_web_page_preview is not None:
@@ -85,6 +84,16 @@ class TelegramBotApi:
             payload["parse_mode"] = "HTML"
         with open(document_path, "rb") as f:
             self.call("sendDocument", payload=payload, files={"document": f})
+
+    def send_audio(self, *, chat_id: int, audio_path: Path, caption: str | None = None, title: str | None = None) -> None:
+        payload: dict[str, object] = {"chat_id": chat_id}
+        if caption:
+            payload["caption"] = caption
+            payload["parse_mode"] = "HTML"
+        if title:
+            payload["title"] = title
+        with open(audio_path, "rb") as f:
+            self.call("sendAudio", payload=payload, files={"audio": f})
 
     def get_file(self, file_id: str) -> dict[str, object]:
         """Resolve a file_id to its metadata (including ``file_path``) via getFile."""

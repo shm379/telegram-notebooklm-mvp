@@ -12,25 +12,34 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from . import toolset
 from .bot_api import TelegramBotApi
 from .clustering import build_topics, label_cluster
 from .config import Settings, get_settings
 from .db import Repository, connect
+from .deleted_watcher import DeletedWatcherManager
 from .embeddings import EmbeddingService
 from .export import build_markdown_export
 from .extraction import ExtractionService
+from .formatting import to_telegram_markdown
 from .jobs import JobWorker
 from .logging_config import setup_logging
 from .media import route_media
 from .office import detect_office_kind, extract_office_text
 from .pipeline import IngestionPipeline
+from .podcast import PodcastUnavailable, build_podcast_source, synthesize_podcast
 from .provider_http import gemini_generate_content
 from .recent import recent_rows
 from .rules import classify_ai_tags, match_tags
 from .search import SearchService
 from .stats import format_stats
 from .telegram_backup import count_messages, parse_export, read_export, render_markdown
-from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
+from .telegram_client import (
+    build_client_from_session_string,
+    request_login_code,
+    sign_in_with_code,
+    sign_in_with_password,
+)
 from .timeline import build_timeline
 from .transcription import TranscriptionService
 
@@ -117,10 +126,19 @@ class NotebookBot:
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         self.worker = JobWorker(self.services.repository, self._run_import_job)
+        self.watcher = DeletedWatcherManager(
+            repository=self.services.repository,
+            build_client=self._build_watcher_client,
+            notify=self._notify_recovered,
+        )
 
     def run_forever(self) -> None:
         logger.info("Bot polling started")
         self.worker.start()
+        try:
+            self.watcher.start_all()
+        except Exception:
+            logger.exception("Failed to start deleted-message watchers")
         while True:
             try:
                 updates = self.services.api.get_updates(offset=self.offset, timeout=30)
@@ -298,6 +316,20 @@ class NotebookBot:
             self._handle_summarize(chat_id, bot_user_id, text.removeprefix("/summarize").strip())
         elif command == "/digest":
             self._handle_digest(chat_id, bot_user_id, text.removeprefix("/digest").strip())
+        elif command == "/podcast":
+            self._handle_podcast(chat_id, bot_user_id, text.removeprefix("/podcast").strip())
+        elif command == "/account":
+            self._handle_account(chat_id, bot_user_id)
+        elif command == "/scheduled":
+            self._handle_scheduled(chat_id, bot_user_id, text.removeprefix("/scheduled").strip())
+        elif command == "/llmexport":
+            self._handle_llm_export(chat_id, bot_user_id, text.removeprefix("/llmexport").strip())
+        elif command == "/resend":
+            self._handle_resend(chat_id, bot_user_id, text.removeprefix("/resend").strip())
+        elif command == "/watchdeleted":
+            self._handle_watchdeleted(chat_id, bot_user_id, text.removeprefix("/watchdeleted").strip())
+        elif command == "/deleted":
+            self._handle_deleted(chat_id, bot_user_id, text.removeprefix("/deleted").strip())
         elif command == "/topics":
             self._handle_topics(chat_id, bot_user_id, text.removeprefix("/topics").strip())
         elif command == "/timeline":
@@ -373,6 +405,7 @@ class NotebookBot:
             "/ask &lt;question&gt; [--source &lt;url&gt;] [--tag &lt;tag&gt;] — ask the AI over your archive\n"
             "/summarize [--source &lt;url&gt;] [--tag &lt;tag&gt;] — summarize a source, tag, or your whole archive\n"
             "/digest [days] — AI recap of recent content (default 7 days)\n"
+            "/podcast [--source &lt;url&gt;] [--tag &lt;tag&gt;] [--collection &lt;name&gt;] — generate an Audio Overview\n"
             "/topics [--source &lt;url&gt;] [--tag &lt;tag&gt;] — cluster your content into topics\n"
             "/timeline [--source &lt;url&gt;] [--tag &lt;tag&gt;] [--day] — browse your archive by date\n"
             "/export [--source &lt;url&gt;] [--tag &lt;tag&gt;] — download a Markdown export\n"
@@ -393,6 +426,13 @@ class NotebookBot:
             "/collection new|add|list|remove|show — group tags into notebooks\n"
             "  (then /summarize --collection &lt;name&gt; or /export --collection &lt;name&gt;)\n"
             "/setarchive &lt;@channel|off&gt; — auto-forward tagged forwards to an archive channel\n\n"
+            "<b>Telegram Toolset</b> (needs /connect)\n"
+            "/account — your linked account info\n"
+            "/scheduled &lt;chat&gt; [cancel &lt;id&gt;] — list/cancel scheduled messages\n"
+            "/llmexport &lt;chat&gt; [limit] — export a chat as an AI-friendly Markdown transcript\n"
+            "/resend &lt;target&gt; &lt;text&gt; — send a message on your behalf\n"
+            "/watchdeleted on|off — capture incoming messages and recover deleted ones\n"
+            "/deleted [n] — show recently recovered deleted messages\n\n"
             "<b>Forwarded Inbox</b>\n"
             "Forward any message to me and I'll save its text/caption to your "
             "searchable inbox. Then use /search or /ask over it."
@@ -880,7 +920,8 @@ class NotebookBot:
             self.services.api.send_message(chat_id=chat_id, text="Sorry, I couldn't generate an answer right now. Please try again later.")
             return
 
-        self.services.api.send_message(chat_id=chat_id, text=f"<b>AI Answer:</b>\n\n{answer}")
+        rendered, parse_mode = to_telegram_markdown(f"**AI Answer:**\n\n{answer}")
+        self.services.api.send_message(chat_id=chat_id, text=rendered, parse_mode=parse_mode)
         if results:
             sources_text = "\n".join([f"- {r.channel_title or r.channel_url} ({r.message_url})" for r in results[:3]])
             self.services.api.send_message(chat_id=chat_id, text=f"<b>Sources:</b>\n{sources_text}", disable_web_page_preview=True)
@@ -1049,7 +1090,8 @@ class NotebookBot:
             logger.exception("Summarize failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, "Sorry, I couldn't generate a summary right now. Please try again later.")
             return
-        self.services.api.send_message(chat_id, f"<b>Summary — {scope_label}</b>\n\n{answer}")
+        rendered, parse_mode = to_telegram_markdown(f"**Summary — {scope_label}**\n\n{answer}")
+        self.services.api.send_message(chat_id, rendered, parse_mode=parse_mode)
 
     def _handle_digest(self, chat_id: int, bot_user_id: int, args: str) -> None:
         days = 7
@@ -1092,7 +1134,71 @@ class NotebookBot:
             logger.exception("Digest failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, "Sorry, I couldn't build the digest right now. Please try again later.")
             return
-        self.services.api.send_message(chat_id, f"<b>Digest — {scope_label}</b>\n\n{answer}")
+        rendered, parse_mode = to_telegram_markdown(f"**Digest — {scope_label}**\n\n{answer}")
+        self.services.api.send_message(chat_id, rendered, parse_mode=parse_mode)
+
+    def _handle_podcast(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        """Generate an Audio Overview (podcast) from a scope of the archive."""
+        collection, args = self._extract_collection(args)
+        if collection:
+            items, scope_label = self._collection_items(bot_user_id, collection)
+            if items is None:
+                self.services.api.send_message(chat_id, f"Collection “{html.escape(collection)}” not found.")
+                return
+        else:
+            _, source, tag = self._split_filters(args)
+            items = self.services.repository.summary_items(owner_id=bot_user_id, channel_url=source, tag=tag)
+            scope_label = tag or source or "your whole archive"
+        if not items:
+            self.services.api.send_message(
+                chat_id,
+                "Nothing to turn into a podcast yet. Ingest a channel, forward messages, or check your /sources and /tags.",
+            )
+            return
+
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
+        openai_api_key = self.services.settings.openai_api_key
+        if not (gemini_api_key or openai_api_key):
+            self.services.api.send_message(
+                chat_id,
+                "An Audio Overview needs an LLM key. Connect a Gemini key via /connect (or set OPENAI_API_KEY).",
+            )
+            return
+
+        self.services.api.send_message(
+            chat_id,
+            f"Generating an Audio Overview of {scope_label} ({len(items)} item(s))… this can take a minute.",
+        )
+        source_text = build_podcast_source(scope_label, items)
+        audio_path: Path | None = None
+        try:
+            audio_path = Path(
+                synthesize_podcast(
+                    text=source_text,
+                    gemini_api_key=gemini_api_key,
+                    openai_api_key=openai_api_key,
+                    tts_model=self.services.settings.podcast_tts_model,
+                    llm_model_name=self.services.settings.podcast_llm_model,
+                )
+            )
+            self.services.api.send_audio(
+                chat_id=chat_id,
+                audio_path=audio_path,
+                caption=f"Audio Overview — {html.escape(scope_label)} ({len(items)} item(s))",
+                title=f"Audio Overview — {scope_label}",
+            )
+        except PodcastUnavailable as exc:
+            self.services.api.send_message(chat_id, str(exc))
+        except Exception:
+            logger.exception("Podcast generation failed for user %s", bot_user_id)
+            self.services.api.send_message(chat_id, "Sorry, I couldn't generate the podcast right now. Please try again later.")
+        finally:
+            if audio_path is not None:
+                try:
+                    audio_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.debug("Could not remove temporary podcast file %s", audio_path)
 
     def _handle_recent(self, chat_id: int, bot_user_id: int, args: str) -> None:
         n = 10
@@ -1372,6 +1478,226 @@ class NotebookBot:
             f"Archive set to <b>{target}</b>. Forwards that match a tag rule will be auto-forwarded there.\n"
             "Make sure I'm an admin of that channel so I can post.",
         )
+
+    # ---- Telegram-Toolset features (account / scheduled / resend / llm-export / deleted) ----
+
+    def _build_watcher_client(self, user: dict) -> object:
+        return build_client_from_session_string(
+            self.services.settings, user["session_string"],
+            api_id=user.get("api_id"), api_hash=user.get("api_hash"),
+        )
+
+    def _user_client(self, user: dict) -> object:
+        """Build an on-demand Telethon client for a connected user."""
+        return self._build_watcher_client(user)
+
+    def _connected_user(self, chat_id: int, bot_user_id: int) -> dict | None:
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        if not user or not user.get("session_string"):
+            self.services.api.send_message(chat_id, "Please /connect first.")
+            return None
+        return user
+
+    def _notify_recovered(self, owner_id: int, rows: list[dict]) -> None:
+        """Bot-side callback for the deleted-message watcher."""
+        user = self.services.repository.get_bot_user(bot_user_id=owner_id)
+        chat_id = user.get("chat_id") if user else None
+        if not chat_id:
+            return
+        lines = [f"🗑️ Recovered {len(rows)} deleted message(s):"]
+        for r in rows[:10]:
+            who = r.get("sender") or "Unknown"
+            text = (r.get("text") or "").strip().replace("\n", " ")
+            snippet = (text[:120] + "…") if len(text) > 120 else text
+            lines.append(f"• <b>{html.escape(str(who))}</b>: {html.escape(snippet)}")
+        self.services.api.send_message(chat_id, "\n".join(lines))
+
+    def _handle_account(self, chat_id: int, bot_user_id: int) -> None:
+        user = self._connected_user(chat_id, bot_user_id)
+        if not user:
+            return
+        client = self._user_client(user)
+
+        async def _do():
+            async with client:
+                return await toolset.account_info(client)
+
+        try:
+            info = self._async_to_sync(_do())
+        except Exception as e:
+            logger.exception("Account info failed for %s", bot_user_id)
+            self.services.api.send_message(chat_id, f"Error: {e}")
+            return
+        self.services.api.send_message(chat_id, toolset.format_account(info))
+
+    def _handle_scheduled(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        user = self._connected_user(chat_id, bot_user_id)
+        if not user:
+            return
+        tokens = args.split()
+        if not tokens:
+            self.services.api.send_message(chat_id, "Usage: /scheduled &lt;chat&gt; [cancel &lt;id&gt;]")
+            return
+        peer = tokens[0]
+        client = self._user_client(user)
+
+        if len(tokens) >= 3 and tokens[1].lower() == "cancel":
+            try:
+                msg_id = int(tokens[2])
+            except ValueError:
+                self.services.api.send_message(chat_id, "Usage: /scheduled &lt;chat&gt; cancel &lt;id&gt;")
+                return
+
+            async def _cancel():
+                async with client:
+                    return await toolset.cancel_scheduled(client, peer, [msg_id])
+
+            try:
+                self._async_to_sync(_cancel())
+                self.services.api.send_message(chat_id, f"Cancelled scheduled message #{msg_id} in {html.escape(peer)}.")
+            except Exception as e:
+                logger.exception("Cancel scheduled failed for %s", bot_user_id)
+                self.services.api.send_message(chat_id, f"Error: {e}")
+            return
+
+        async def _list():
+            async with client:
+                return await toolset.list_scheduled(client, peer)
+
+        try:
+            items = self._async_to_sync(_list())
+        except Exception as e:
+            logger.exception("List scheduled failed for %s", bot_user_id)
+            self.services.api.send_message(chat_id, f"Error: {e}")
+            return
+        self.services.api.send_message(chat_id, toolset.format_scheduled(peer, items))
+
+    def _handle_llm_export(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        user = self._connected_user(chat_id, bot_user_id)
+        if not user:
+            return
+        tokens = args.split()
+        if not tokens:
+            self.services.api.send_message(chat_id, "Usage: /llmexport &lt;chat&gt; [limit]")
+            return
+        peer = tokens[0]
+        limit = 200
+        if len(tokens) > 1:
+            try:
+                limit = max(1, min(2000, int(tokens[1])))
+            except ValueError:
+                pass
+        client = self._user_client(user)
+        self.services.api.send_message(chat_id, f"Exporting up to {limit} messages from {html.escape(peer)}…")
+
+        async def _do():
+            async with client:
+                return await toolset.fetch_chat_messages(client, peer, limit=limit)
+
+        try:
+            chat_label, rows = self._async_to_sync(_do(), timeout=180)
+        except Exception as e:
+            logger.exception("LLM export failed for %s", bot_user_id)
+            self.services.api.send_message(chat_id, f"Error: {e}")
+            return
+        if not rows:
+            self.services.api.send_message(chat_id, "No text messages found to export.")
+            return
+        markdown = toolset.build_llm_export(chat_label, rows)
+        slug = re.sub(r"[^A-Za-z0-9_-]+", "-", peer).strip("-").lower() or "chat"
+        tmpdir = Path(tempfile.mkdtemp(prefix="llmexport_"))
+        path = tmpdir / f"telegram-{slug}.md"
+        path.write_text(markdown, encoding="utf-8")
+        try:
+            self.services.api.send_document(
+                chat_id=chat_id, document_path=path,
+                caption=f"LLM export — {html.escape(chat_label)} ({len(rows)} msg)",
+            )
+        except Exception:
+            logger.exception("LLM export send failed for %s", bot_user_id)
+            self.services.api.send_message(chat_id, "Sorry, I couldn't send the export right now.")
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def _handle_resend(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        user = self._connected_user(chat_id, bot_user_id)
+        if not user:
+            return
+        tokens = args.split(maxsplit=1)
+        if len(tokens) < 2:
+            self.services.api.send_message(chat_id, "Usage: /resend &lt;target_chat&gt; &lt;message text&gt;")
+            return
+        target, body = tokens[0], tokens[1]
+        client = self._user_client(user)
+
+        async def _do():
+            async with client:
+                return await toolset.resend_text(client, target, body)
+
+        try:
+            msg_id = self._async_to_sync(_do())
+        except Exception as e:
+            logger.exception("Resend failed for %s", bot_user_id)
+            self.services.api.send_message(chat_id, f"Error: {e}")
+            return
+        self.services.api.send_message(chat_id, f"Sent to {html.escape(target)} (message #{msg_id}).")
+
+    def _handle_watchdeleted(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        choice = args.strip().lower()
+        if choice == "on":
+            user = self._connected_user(chat_id, bot_user_id)
+            if not user:
+                return
+            self.services.repository.set_watch_deleted(bot_user_id=bot_user_id, enabled=True)
+            try:
+                self.watcher.start_for_user(self.services.repository.get_bot_user(bot_user_id=bot_user_id))
+            except Exception:
+                logger.exception("Could not start watcher for %s", bot_user_id)
+            self.services.api.send_message(
+                chat_id,
+                "Deleted-message watcher is ON. I'll cache new incoming messages and surface any that get deleted.\n"
+                "Note: only messages received from now on can be recovered — past deletions can't.",
+            )
+            return
+        if choice == "off":
+            self.services.repository.set_watch_deleted(bot_user_id=bot_user_id, enabled=False)
+            try:
+                self.watcher.stop_for_user(bot_user_id)
+            except Exception:
+                logger.exception("Could not stop watcher for %s", bot_user_id)
+            self.services.api.send_message(chat_id, "Deleted-message watcher is OFF.")
+            return
+        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        state = "ON" if (user and user.get("watch_deleted")) else "OFF"
+        self.services.api.send_message(
+            chat_id,
+            f"Deleted-message watcher is {state}. Use /watchdeleted on|off. See recovered messages with /deleted.",
+        )
+
+    def _handle_deleted(self, chat_id: int, bot_user_id: int, args: str) -> None:
+        n = 10
+        tokens = args.split()
+        if tokens:
+            try:
+                n = max(1, min(50, int(tokens[0])))
+            except ValueError:
+                pass
+        rows = self.services.repository.list_recovered(owner_id=bot_user_id, limit=n)
+        if not rows:
+            self.services.api.send_message(chat_id, "No recovered deleted messages yet. Enable capture with /watchdeleted on.")
+            return
+        lines = [f"<b>Recovered deleted ({len(rows)})</b>"]
+        for r in rows:
+            who = r.get("sender") or "Unknown"
+            where = r.get("chat_title") or ""
+            text = (r.get("text") or "").strip().replace("\n", " ")
+            snippet = (text[:160] + "…") if len(text) > 160 else text
+            head = f"\n• <b>{html.escape(str(who))}</b>"
+            if where:
+                head += f" · {html.escape(str(where))}"
+            lines.append(head)
+            lines.append(f"  {html.escape(snippet)}")
+        self.services.api.send_message(chat_id, "\n".join(lines))
 
     def _handle_join(self, chat_id: int, bot_user_id: int, link: str) -> None:
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)

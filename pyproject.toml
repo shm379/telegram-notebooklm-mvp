@@ -1,6 +1,6 @@
 [project]
 name = "telegram-notebooklm-mvp"
-version = "0.1.0"
+version = "0.3.0"
 description = "Ingest public Telegram channels, transcribe media, and search transcripts."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -9,10 +9,14 @@ dependencies = [
   "openai>=1.75.0",
   "python-dotenv>=1.0.1",
   "telethon>=1.39.0",
+  "telegramify-markdown>=1.2.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6"]
+# Optional: Audio Overview / podcast generation from the archive (/podcast).
+# Heavy, so it is opt-in: pip install ".[podcast]"
+podcast = ["podcastfy>=0.4.0"]
 
 [build-system]
 requires = ["hatchling"]
