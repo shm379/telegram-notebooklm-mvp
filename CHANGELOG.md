@@ -41,247 +41,247 @@
 
 ## Opt-in AI auto-tagging on forwards (2026-06-12)
 
-تکمیل AI rules: اجرای خودکار آن‌ها روی فورواردهای جدید، به‌صورت opt-in.
+Completing AI rules: running them automatically on new forwards, on an opt-in basis.
 
 ### Behaviour
-- `/airules on|off` (پیش‌فرض خاموش) تعیین می‌کند که قوانین AI روی هر فوروارد جدید به‌صورت خودکار اجرا شوند یا نه. در حالت روشن، به‌ازای هر آیتم یک فراخوانی LLM انجام می‌شود؛ **import انبوه کانال هیچ‌وقت auto-classify نمی‌شود** (هزینه کنترل‌شده).
-- نیازمند کلید Gemini؛ در نبود کلید هنگام روشن‌کردن اطلاع داده می‌شود.
+- `/airules on|off` (off by default) controls whether AI rules run automatically on every new forward. When on, one LLM call is made per item; **bulk channel imports are never auto-classified** (controlled cost).
+- Requires a Gemini key; if no key is present when turning it on, you are notified.
 
 ### Design
-- `IngestionPipeline` پارامتر اختیاری `ai_classifier` گرفت؛ `_apply_rules` در صورت وجود آن، قوانین AI را هم اعمال می‌کند (با بلعیدن خطا). فقط مسیر Forwarded Inbox آن را wire می‌کند (و فقط وقتی کاربر opt-in کرده و کلید دارد).
-- ستون `ai_autotag` روی `bot_users` با مهاجرت idempotent؛ `Repository.set_ai_autotag` و helper `_ai_classifier_for_user`.
+- `IngestionPipeline` gained an optional `ai_classifier` parameter; `_apply_rules` also applies AI rules when it is present (swallowing errors). Only the Forwarded Inbox path wires it up (and only when the user has opted in and has a key).
+- An `ai_autotag` column on `bot_users` with an idempotent migration; `Repository.set_ai_autotag` and the `_ai_classifier_for_user` helper.
 
 ### Tests
-- `tests/test_ai_autotag.py`: اعمال AI rules فقط با classifier، بلعیدن خطای classifier، persist تنظیم، گیتینگ `_ai_classifier_for_user`، و هندلر `/airules`.
+- `tests/test_ai_autotag.py`: applying AI rules only with a classifier, swallowing classifier errors, persisting the setting, gating in `_ai_classifier_for_user`, and the `/airules` handler.
 
 ## Query collections (2026-06-12)
 
-تکمیل Collections: حالا یک دفترچه قابل خلاصه/خروجی‌گرفتن است.
+Completing Collections: a notebook can now be summarized or exported.
 
 ### Behaviour
-- `/summarize --collection <name>` و `/export --collection <name>` همه‌ی آیتم‌های دارای هر یک از تگ‌های مجموعه را (از `items_for_tags`) خلاصه یا به Markdown خروجی می‌گیرند. اگر مجموعه وجود نداشته باشد پیام مناسب می‌دهد.
+- `/summarize --collection <name>` and `/export --collection <name>` summarize or export to Markdown all items that have any of the collection's tags (from `items_for_tags`). If the collection does not exist, an appropriate message is shown.
 
 ### Components
-- helper خالص `NotebookBot._extract_collection(args)` (جداکردن فلگ `--collection <name>`) و `_collection_items` (resolve مجموعه به items + scope label).
+- The pure helper `NotebookBot._extract_collection(args)` (parsing the `--collection <name>` flag) and `_collection_items` (resolving a collection to items + a scope label).
 
 ### Tests
-- `tests/test_collections.py`: `_extract_collection`، `/summarize --collection` (اجتماع تگ‌ها و مجموعه‌ی ناموجود)، و `/export --collection` (محتوای درست سند).
+- `tests/test_collections.py`: `_extract_collection`, `/summarize --collection` (union of tags and a missing collection), and `/export --collection` (correct document content).
 
 ## Collections / notebooks (2026-06-12)
 
-گروه‌بندی چند تگ زیر یک «دفترچه» (collection).
+Grouping multiple tags under a single "notebook" (collection).
 
 ### Behaviour
-- `/collection new <name>` (نام تک‌کلمه)، `/collection add <name> <tag>`، `/collection list`، `/collection remove <name>`، و `/collection show <name>` که آیتم‌های دارای هر کدام از تگ‌های مجموعه را (به‌صورت distinct، جدیدترین اول) نشان می‌دهد. همه scoped به owner.
+- `/collection new <name>` (single-word name), `/collection add <name> <tag>`, `/collection list`, `/collection remove <name>`, and `/collection show <name>`, which shows the items that have any of the collection's tags (distinct, newest first). All scoped to the owner.
 
 ### Components
-- جداول `collections` و `collection_tags` (با index یکتای `(owner_id, name)`).
-- متدهای repository: `create_collection`، `add_collection_tag`، `list_collections`، `collection_tags`، `remove_collection`، و `items_for_tags(owner_id, tags, limit)` (اجتماع distinct).
+- The `collections` and `collection_tags` tables (with a unique index on `(owner_id, name)`).
+- Repository methods: `create_collection`, `add_collection_tag`, `list_collections`, `collection_tags`, `remove_collection`, and `items_for_tags(owner_id, tags, limit)` (distinct union).
 
 ### Tests
-- `tests/test_collections.py`: CRUD و افزودن تگ، ایزولاسیون per-user، `items_for_tags` (اجتماع/distinct/scoping)، و مسیرهای کامل هندلر (new/add/list/show/remove + خطاها).
+- `tests/test_collections.py`: CRUD and tag addition, per-user isolation, `items_for_tags` (union/distinct/scoping), and the full handler paths (new/add/list/show/remove + errors).
 
 ## Dashboard Library panel (2026-06-12)
 
-- داشبورد وب یک کارت «Library» گرفت که با دکمه، `/api/stats` و `/api/recent` را فراخوانی و خلاصه‌ی آرشیو (تعداد آیتم/منبع/تگ و نوع مدیا) و آخرین آیتم‌ها را نمایش می‌دهد.
-- تست smoke در `tests/test_web_api.py` که وجود پنل و ارجاع به endpointها را در `INDEX_HTML` بررسی می‌کند.
+- The web dashboard gained a "Library" card that, on a button click, calls `/api/stats` and `/api/recent` and displays an archive summary (item/source/tag counts and media types) and the latest items.
+- A smoke test in `tests/test_web_api.py` that checks for the presence of the panel and references to the endpoints in `INDEX_HTML`.
 
 ## Web API: stats / recent / timeline (2026-06-12)
 
-پاریتی داشبورد وب با قابلیت‌های جدید (لایه‌ی JSON API).
+Web dashboard parity with the new capabilities (a JSON API layer).
 
 ### Behaviour
-- سه endpoint فقط-خواندنی `GET /api/stats`، `GET /api/recent?limit=N` و `GET /api/timeline?granularity=month|day` که آرشیو داشبورد (owner ثابت `0`) را برمی‌گردانند. مثل بقیه‌ی API با `WEB_API_TOKEN` (یا loopback در نبود توکن) محافظت می‌شوند و از همان متدهای repository و توابع خالص `recent_rows`/`build_timeline`/`archive_stats` استفاده می‌کنند.
-- helper `_query_int` برای خواندن امن و clamp‌شده‌ی پارامترهای عددی query.
+- Three read-only endpoints `GET /api/stats`, `GET /api/recent?limit=N`, and `GET /api/timeline?granularity=month|day` that return the dashboard archive (fixed owner `0`). Like the rest of the API, they are protected with `WEB_API_TOKEN` (or loopback when no token is set) and use the same repository methods and pure functions `recent_rows`/`build_timeline`/`archive_stats`.
+- The `_query_int` helper for safe, clamped reading of numeric query parameters.
 
 ### Outside scope (follow-up)
-- نمایش این داده‌ها در رابط HTML داشبورد (فعلاً فقط JSON API).
+- Displaying this data in the dashboard HTML interface (for now, JSON API only).
 
 ### Tests
-- `tests/test_web_api.py`: خروجی `/api/stats`، `/api/recent` (سقف limit و ترتیب) و `/api/timeline`، و الزام auth در غیرلوکال.
+- `tests/test_web_api.py`: output of `/api/stats`, `/api/recent` (limit cap and ordering) and `/api/timeline`, and the auth requirement when non-local.
 
 ## Recent items browse (2026-06-12)
 
-مرور سریع آخرین آیتم‌ها — مکمل `/timeline` و `/digest`.
+Quick browsing of the latest items — a complement to `/timeline` and `/digest`.
 
 ### Behaviour
-- `/recent [n]` (پیش‌فرض ۱۰، حداکثر ۵۰) آخرین آیتم‌ها را با منبع، تاریخ، snippet و لینک نشان می‌دهد. ابزار MCP `list_recent` همان فهرست را می‌دهد.
+- `/recent [n]` (default 10, max 50) shows the latest items with source, date, snippet, and link. The MCP tool `list_recent` returns the same list.
 
 ### Components
-- ماژول خالص `recent.py` با `recent_rows(items, *, limit, snippet_chars)` (نرمال‌سازی whitespace و کوتاه‌سازی snippet)؛ از `timeline_items` (جدیدترین اول) تغذیه می‌شود.
+- The pure `recent.py` module with `recent_rows(items, *, limit, snippet_chars)` (whitespace normalization and snippet truncation); fed by `timeline_items` (newest first).
 
 ### Tests
-- `tests/test_recent.py`: نرمال‌سازی/سقف `recent_rows`، منبع ناشناخته، هندلر (ترتیب جدید→قدیم و آرشیو خالی)، و ابزار MCP.
+- `tests/test_recent.py`: normalization/cap of `recent_rows`, unknown source, the handler (new→old ordering and an empty archive), and the MCP tool.
 
 ## Tag management (2026-06-12)
 
-مدیریت دستی تگ‌ها (rename / merge / delete).
+Manual tag management (rename / merge / delete).
 
 ### Behaviour
-- `/tag rename <old> -> <new>` نام تگ را عوض می‌کند؛ اگر `<new>` از قبل وجود داشته باشد، دو تگ ادغام می‌شوند (بدون خطای کلید تکراری). `/tag delete <tag>` تگ را از همه‌ی آیتم‌ها برمی‌دارد. هر دو scoped به owner.
+- `/tag rename <old> -> <new>` renames a tag; if `<new>` already exists, the two tags are merged (without a duplicate-key error). `/tag delete <tag>` removes the tag from all items. Both scoped to the owner.
 
 ### Components
-- `Repository.rename_tag` (INSERT OR IGNORE سپس DELETE برای ادغام امن) و `Repository.delete_tag`.
+- `Repository.rename_tag` (INSERT OR IGNORE then DELETE for a safe merge) and `Repository.delete_tag`.
 
 ### Tests
-- `tests/test_tag_management.py`: rename، merge در تگ موجود، delete، ایزولاسیون per-user، و مسیرهای هندلر (rename/delete/usage/missing).
+- `tests/test_tag_management.py`: rename, merge into an existing tag, delete, per-user isolation, and the handler paths (rename/delete/usage/missing).
 
 ## Recent digest (2026-06-12)
 
-«بهم بگو چی از دست دادم» — خلاصه‌ی AI از محتوای اخیر.
+"Tell me what I missed" — an AI summary of recent content.
 
 ### Behaviour
-- `/digest [days]` (پیش‌فرض ۷، بازه‌ی ۱ تا ۹۰): محتوای ثبت‌شده در N روز اخیر را با همان موتور `summarize` خلاصه می‌کند. در نبود کلید Gemini، به یک خلاصه‌ی ساده (تعداد آیتم + منابع) برمی‌گردد؛ در نبود محتوای اخیر، پیام مناسب می‌دهد.
+- `/digest [days]` (default 7, range 1 to 90): summarizes content recorded in the last N days using the same `summarize` engine. Without a Gemini key, it falls back to a simple summary (item count + sources); with no recent content, it shows an appropriate message.
 
 ### Components
-- `Repository.recent_items(owner_id, since_date, limit)` — آیتم‌های با `message_date >= since` (جدیدترین اول).
+- `Repository.recent_items(owner_id, since_date, limit)` — items with `message_date >= since` (newest first).
 
 ### Tests
-- `tests/test_digest.py`: فیلتر تاریخ/owner در `recent_items`، و مسیرهای هندلر (بدون محتوا، fallback بدون کلید، و استفاده از summarize با کلید).
+- `tests/test_digest.py`: date/owner filtering in `recent_items`, and the handler paths (no content, fallback without a key, and using summarize with a key).
 
 ## Archive stats (2026-06-12)
 
-نمای کلی آرشیو با `/stats` و ابزار MCP `archive_stats`.
+An archive overview via `/stats` and the MCP tool `archive_stats`.
 
 ### Behaviour
-- `/stats` تعداد آیتم‌ها، منابع، تگ‌ها، شمارش بر اساس نوع مدیا، و بازه‌ی زمانی (اولین/آخرین تاریخ) را نشان می‌دهد. ابزار MCP `archive_stats` همان خروجی را می‌دهد.
+- `/stats` shows the item, source, and tag counts, counts by media type, and the time range (first/last date). The MCP tool `archive_stats` returns the same output.
 
 ### Components
-- `Repository.archive_stats(owner_id)` با aggregate queries (scoped به owner).
-- ماژول خالص `stats.py` با `format_stats(stats)`.
+- `Repository.archive_stats(owner_id)` with aggregate queries (scoped to the owner).
+- The pure `stats.py` module with `format_stats(stats)`.
 
 ### Tests
-- `tests/test_stats.py`: قالب‌بندی (خالی/پر)، aggregate و scoping per-user در `archive_stats`، و ابزار MCP.
+- `tests/test_stats.py`: formatting (empty/populated), aggregation and per-user scoping in `archive_stats`, and the MCP tool.
 
 ## Markdown export (2026-06-12)
 
-خروجی‌گرفتن آرشیو به یک فایل Markdown قابل‌دانلود.
+Exporting the archive to a downloadable Markdown file.
 
 ### Behaviour
-- `/export [--source <url>] [--tag <tag>]` کل آرشیو، یک منبع یا یک تگ را به یک سند Markdown (با عنوان، منبع، لینک و متن هر آیتم) تبدیل و به‌صورت فایل به کاربر می‌فرستد.
+- `/export [--source <url>] [--tag <tag>]` converts the entire archive, a single source, or a single tag into a Markdown document (with title, source, link, and text for each item) and sends it to the user as a file.
 
 ### Components
-- ماژول خالص `export.py` با `build_markdown_export(scope_label, items)`.
-- `TelegramBotApi.send_document` برای آپلود فایل.
-- handler `_handle_export` که سند را در یک فایل موقت می‌نویسد، می‌فرستد و پاک‌سازی می‌کند.
+- The pure `export.py` module with `build_markdown_export(scope_label, items)`.
+- `TelegramBotApi.send_document` for uploading the file.
+- The `_handle_export` handler, which writes the document to a temporary file, sends it, and cleans up.
 
 ### Tests
-- `tests/test_export.py`: ساختار Markdown و فیلدهای ناقص، و orchestration هندلر (ارسال سند با محتوای درست، و پیام آرشیو خالی).
+- `tests/test_export.py`: Markdown structure and missing fields, and the handler orchestration (sending the document with the correct content, and the empty-archive message).
 
 ## LLM topic labels (2026-06-12)
 
-نام‌گذاری خوشه‌های `/topics` با LLM (در صورت وجود کلید Gemini).
+Naming `/topics` clusters with an LLM (if a Gemini key is present).
 
 ### Behaviour
-- `/topics` و ابزار MCP `list_topics` حالا برچسب هر خوشه را با یک فراخوانی LLM (Gemini) از روی نمونه‌متن‌های خوشه می‌سازند؛ در نبود کلید یا خطا/پاسخ خالی، به برچسب مبتنی بر پرتکرارترین واژه‌ها (`top_terms`) برمی‌گردند. خروجی ربات HTML-escape می‌شود.
+- `/topics` and the MCP tool `list_topics` now build each cluster's label with one LLM call (Gemini) based on sample texts from the cluster; without a key, or on an error/empty response, they fall back to a label based on the most frequent meaningful terms (`top_terms`). The bot output is HTML-escaped.
 
 ### Design
-- در `clustering.py`: توابع خالص `build_label_prompt` و `parse_topic_label` و `label_cluster(texts, *, generate)` با فراخوانی LLM تزریق‌شده؛ `build_topics` پارامتر اختیاری `namer` گرفت که per-cluster برچسب می‌سازد و با خطا/خالی fallback می‌کند.
-- در `bot.py` و `mcp_server.py` فقط وقتی کلید Gemini باشد namer ساخته می‌شود.
+- In `clustering.py`: the pure functions `build_label_prompt` and `parse_topic_label`, and `label_cluster(texts, *, generate)` with an injected LLM call; `build_topics` gained an optional `namer` parameter that builds a per-cluster label and falls back on error/empty.
+- In `bot.py` and `mcp_server.py`, the namer is only built when a Gemini key is present.
 
 ### Tests
-- `tests/test_clustering.py`: ساخت/پارس prompt برچسب، `label_cluster` با generate تزریق‌شده، و `build_topics` با namer (برچسب‌گذاری، و fallback روی خطا/خالی).
+- `tests/test_clustering.py`: building/parsing the label prompt, `label_cluster` with an injected generate, and `build_topics` with a namer (labeling, and fallback on error/empty).
 
 ## Forwarded media processing (2026-06-12)
 
-تکمیل Forwarded Inbox: مدیای فورواردشده دانلود و به متن قابل‌جستجو تبدیل می‌شود.
+Completing the Forwarded Inbox: forwarded media is downloaded and converted to searchable text.
 
 ### Behaviour
-- فایل‌های صوت/ویدیو/voice/video_note به‌صورت خودکار transcribe می‌شوند (همان `TranscriptionService`)، و عکس‌ها و اسناد PDF/تصویری با OCR (Gemini multimodal) به متن تبدیل می‌شوند. متن استخراج‌شده در inbox ذخیره، تگ‌گذاری، embed و قابل `/search`/`/ask` می‌شود (و در صورت تطبیق tag، auto-forward هم می‌شود).
-- اگر کلید Gemini نباشد یا نوع مدیا پشتیبانی نشود، به کاربر اطلاع داده می‌شود و فقط ارجاع/کپشن ذخیره می‌شود.
+- Audio/video/voice/video_note files are transcribed automatically (the same `TranscriptionService`), and photos and PDF/image documents are converted to text via OCR (Gemini multimodal). The extracted text is stored in the inbox, tagged, embedded, and made `/search`/`/ask`-able (and is also auto-forwarded if a tag matches).
+- If there is no Gemini key, or the media type is not supported, the user is notified and only the reference/caption is stored.
 
 ### Components
-- `TelegramBotApi.get_file` + `download_file` (و `file_base_url`) برای دانلود فایل از Bot API.
-- `provider_http.gemini_extract_document` (OCR/استخراج متن چندوجهی) و سرویس نازک `ExtractionService` هم‌سطح `TranscriptionService`.
-- در `bot.py`: helperهای خالص `_forward_file_ref` (انتخاب فایل، بزرگ‌ترین سایز عکس) و `_media_route` (مسیر transcribe/extract)، و هسته‌ی orchestration `_process_forwarded_media` با تزریق سرویس‌ها و download برای تست آفلاین کامل.
+- `TelegramBotApi.get_file` + `download_file` (and `file_base_url`) for downloading the file from the Bot API.
+- `provider_http.gemini_extract_document` (multimodal OCR/text extraction) and the thin `ExtractionService`, on a par with `TranscriptionService`.
+- In `bot.py`: the pure helpers `_forward_file_ref` (file selection, largest photo size) and `_media_route` (transcribe/extract route), and the orchestration core `_process_forwarded_media` with service and download injection for fully offline testing.
 
 ### Outside scope (follow-up)
-- استخراج DOCX/Excel و پردازش مدیا در مسیر import کامل کانال.
+- DOCX/Excel extraction and media processing in the full channel import path.
 
 ### Tests
-- `tests/test_inbox_media.py`: انتخاب فایل و routing، orchestration برای transcribe/extract، رد در نبود سرویس/route/دانلود، بلعیدن خطای سرویس، و `file_base_url`.
+- `tests/test_inbox_media.py`: file selection and routing, orchestration for transcribe/extract, rejection when a service/route/download is missing, swallowing service errors, and `file_base_url`.
 
 ## AI-based rules (2026-06-12)
 
-قوانین tag مبتنی بر LLM، در کنار قوانین keyword موجود.
+LLM-based tag rules, alongside the existing keyword rules.
 
 ### Behaviour
-- `/rule add-ai <criterion> -> <tag>` یک قانون با معیار زبان طبیعی تعریف می‌کند؛ `/rule list` نوع هر قانون را با آیکن (📝 keyword / 🤖 ai) نشان می‌دهد.
-- قوانین AI فقط هنگام `/rule apply` ارزیابی می‌شوند (یک فراخوانی LLM به‌ازای هر آیتم، پوشش همه‌ی قوانین AI). در نبود کلید Gemini نادیده گرفته می‌شوند و در خروجی اطلاع داده می‌شود. قوانین keyword مثل قبل روی هر ingest اعمال می‌شوند.
-- `match_tags` حالا قوانین AI را در مسیرهای خودکار رد می‌کند.
+- `/rule add-ai <criterion> -> <tag>` defines a rule with a natural-language criterion; `/rule list` shows each rule's type with an icon (📝 keyword / 🤖 ai).
+- AI rules are evaluated only during `/rule apply` (one LLM call per item, covering all AI rules). Without a Gemini key they are ignored, and this is reported in the output. Keyword rules are applied on every ingest as before.
+- `match_tags` now skips AI rules in the automatic paths.
 
 ### Design
-- ماژول `rules.py` با توابع خالص `build_classify_prompt` و `parse_classified_tags` و `classify_ai_tags(text, ai_rules, *, generate)` که فراخوانی LLM را inject می‌کند تا کاملاً offline-testable بماند.
-- ستون `kind` روی جدول `rules` با مهاجرت idempotent `_ensure_rule_columns`؛ `add_rule`/`list_rules` با پشتیبانی از `kind`.
+- The `rules.py` module with the pure functions `build_classify_prompt` and `parse_classified_tags`, and `classify_ai_tags(text, ai_rules, *, generate)`, which injects the LLM call so it stays fully offline-testable.
+- A `kind` column on the `rules` table with the idempotent migration `_ensure_rule_columns`; `add_rule`/`list_rules` with `kind` support.
 
 ### Outside scope (follow-up)
-- اعمال خودکار قوانین AI روی هر ingest (فعلاً فقط `/rule apply`).
+- Automatically applying AI rules on every ingest (for now, only `/rule apply`).
 
 ### Tests
-- `tests/test_ai_rules.py`: رد قوانین AI در `match_tags`، ساخت/پارس prompt، `classify_ai_tags` با generate تزریق‌شده و short-circuit، ذخیره‌ی `kind`، و `/rule apply` با ترکیب keyword+AI (LLM جعلی) و رد AI بدون کلید.
+- `tests/test_ai_rules.py`: skipping AI rules in `match_tags`, building/parsing the prompt, `classify_ai_tags` with an injected generate and short-circuit, persisting `kind`, and `/rule apply` with a keyword+AI combination (fake LLM) and skipping AI without a key.
 
 ## Timeline (2026-06-11)
 
-نمای زمانی آرشیو — مکمل زمانیِ topic clustering.
+A temporal view of the archive — the temporal complement to topic clustering.
 
 ### Behaviour
-- ماژول جدید `timeline.py` (pure-Python، بدون وابستگی): `build_timeline` آیتم‌های دارای تاریخ را در bucketهای تقویمی (ماه `YYYY-MM` یا روز `YYYY-MM-DD`) گروه می‌کند و per-period شمارش/منابع/نمونه می‌دهد؛ چون تاریخ‌ها ISO 8601 هستند، bucket فقط prefix تاریخ است. تاریخ‌های نامعتبر کنار گذاشته می‌شوند.
-- `Repository.timeline_items` آیتم‌های دارای `message_date` را (scoped به owner + source/tag، جدیدترین اول) برمی‌گرداند.
-- دستور ربات `/timeline [--source <url>] [--tag <tag>] [--day]` (پیش‌فرض ماه) و ابزار MCP `timeline`. فیلدهای کاربر در خروجی HTML با `html.escape` فرار داده می‌شوند.
-- `/help`، README و CHANGELOG به‌روز شدند.
+- A new `timeline.py` module (pure Python, no dependencies): `build_timeline` groups dated items into calendar buckets (month `YYYY-MM` or day `YYYY-MM-DD`) and provides per-period counts/sources/sample; because dates are ISO 8601, the bucket is simply a date prefix. Invalid dates are discarded.
+- `Repository.timeline_items` returns the items that have a `message_date` (scoped to owner + source/tag, newest first).
+- The bot command `/timeline [--source <url>] [--tag <tag>] [--day]` (month by default) and the MCP tool `timeline`. User fields in the output are escaped with `html.escape`.
+- `/help`, README, and CHANGELOG were updated.
 
 ### Tests
-- `tests/test_timeline.py`: `period_key` (bucket و رد تاریخ بد)، گروه‌بندی ماه/روز و ترتیب نزولی، scoping و ترتیب `timeline_items`، و ابزار MCP `timeline`.
+- `tests/test_timeline.py`: `period_key` (bucket and rejection of a bad date), month/day grouping and descending ordering, scoping and ordering of `timeline_items`, and the MCP tool `timeline`.
 
 ## Fix: HTML-escape archive forwards (2026-06-11)
 
-- چون `send_message` با `parse_mode: HTML` ارسال می‌کند، فیلدهای کاربر-کنترل (label منبع، tagها، متن، لینک) در auto-forward و پیام تأیید inbox حالا با `html.escape` فرار داده می‌شوند. پیش‌تر وجود `<`، `>` یا `&` باعث خطای parser تلگرام و در نتیجه نرسیدن بی‌صدای آیتم به کانال آرشیو می‌شد.
-- تست جدید در `tests/test_autoforward.py` که escape شدن این کاراکترها را بررسی می‌کند.
+- Because `send_message` sends with `parse_mode: HTML`, user-controlled fields (source label, tags, text, link) in auto-forwards and the inbox confirmation message are now escaped with `html.escape`. Previously, the presence of `<`, `>`, or `&` caused a Telegram parser error and, as a result, the item would silently fail to reach the archive channel.
+- A new test in `tests/test_autoforward.py` that checks that these characters are escaped.
 
 ## Auto-forward to an archive channel (2026-06-11)
 
-forward خودکار آیتم‌های tag‌خورده به یک کانال آرشیو (از follow-up های Rule Engine).
+Automatic forwarding of tagged items to an archive channel (one of the Rule Engine follow-ups).
 
 ### Behaviour
-- دستور `/setarchive <@channel | chat id>` کانال آرشیو کاربر را تنظیم می‌کند؛ `/setarchive off` آن را غیرفعال و `/setarchive` بدون آرگومان وضعیت فعلی را نشان می‌دهد.
-- در مسیر Forwarded Inbox، بعد از ذخیره‌ی موفق، متن فوروارد با قوانین کاربر (`match_tags`) سنجیده می‌شود؛ اگر حداقل یک tag مطابقت کند و کانال آرشیو تنظیم شده باشد، آیتم با ذکر منبع، tagها، متن و لینک به کانال آرشیو فوروارد می‌شود. خطای ارسال بی‌صدا لاگ می‌شود و جریان اصلی را نمی‌شکند.
+- The `/setarchive <@channel | chat id>` command sets the user's archive channel; `/setarchive off` disables it, and `/setarchive` with no argument shows the current status.
+- In the Forwarded Inbox path, after a successful save, the forwarded text is checked against the user's rules (`match_tags`); if at least one tag matches and an archive channel is set, the item is forwarded to the archive channel with its source, tags, text, and link. A send error is logged silently and does not break the main flow.
 
 ### Data
-- ستون جدید `archive_chat_id` روی `bot_users` با مهاجرت idempotent `_ensure_bot_user_columns` (ALTER TABLE در صورت نبود ستون). متد `Repository.set_archive_chat`.
+- A new `archive_chat_id` column on `bot_users` with the idempotent migration `_ensure_bot_user_columns` (ALTER TABLE if the column is missing). The `Repository.set_archive_chat` method.
 
 ### Outside scope (follow-up)
-- قوانین AI-based و auto-forward برای import کانال‌ها (فعلاً فقط Forwarded Inbox).
+- AI-based rules and auto-forward for channel imports (for now, Forwarded Inbox only).
 
 ### Tests
-- `tests/test_autoforward.py`: تصمیم/قالب‌بندی `_auto_forward` (ارسال هنگام وجود archive+tag، رد در نبود هرکدام، بلعیدن خطای ارسال)، چرخه‌ی `/setarchive` (set/show/clear)، و مهاجرت ستون + scoping per-user.
+- `tests/test_autoforward.py`: the decision/formatting of `_auto_forward` (sending when archive+tag are present, skipping when either is missing, swallowing send errors), the `/setarchive` cycle (set/show/clear), and the column migration + per-user scoping.
 
 ## Topic clustering (2026-06-11)
 
-خوشه‌بندی موضوعی محتوای آرشیو (از follow-up های NotebookLM).
+Topic clustering of archive content (one of the NotebookLM follow-ups).
 
 ### Behaviour
-- ماژول جدید `clustering.py` (pure-Python، بدون وابستگی): خوشه‌بندی greedy تک‌پاس بر اساس شباهت کسینوسی نسبت به centroidهای متحرک، و `top_terms` برای ساخت برچسب خوشه از پرتکرارترین واژه‌های معنادار (با stopword چندزبانه). چون chunkها embedding ذخیره‌شده دارند، کاملاً آفلاین کار می‌کند.
-- `Repository.chunks_with_embeddings` chunkهای دارای embedding را (scoped به owner + source/tag) برمی‌گرداند و BLOB را decode می‌کند.
-- دستور ربات `/topics [--source <url>] [--tag <tag>]` و ابزار MCP `list_topics`.
-- `/help` و README به‌روزرسانی شدند.
+- A new `clustering.py` module (pure Python, no dependencies): single-pass greedy clustering based on cosine similarity to moving centroids, and `top_terms` for building a cluster label from the most frequent meaningful terms (with a multilingual stopword list). Because chunks have stored embeddings, it works fully offline.
+- `Repository.chunks_with_embeddings` returns chunks that have an embedding (scoped to owner + source/tag) and decodes the BLOB.
+- The bot command `/topics [--source <url>] [--tag <tag>]` and the MCP tool `list_topics`.
+- `/help` and README were updated.
 
 ### Outside scope (follow-up)
-- نام‌گذاری خوشه‌ها با LLM و timeline خودکار.
+- Naming clusters with an LLM and an automatic timeline.
 
 ### Tests
-- `tests/test_clustering.py`: `top_terms`، جداسازی خوشه‌ها، سقف خوشه‌ها، رد آیتم‌های بدون embedding، برچسب/مرتب‌سازی `build_topics`، decode و scoping در `chunks_with_embeddings`، و ابزار MCP `list_topics`.
+- `tests/test_clustering.py`: `top_terms`, cluster separation, the cluster cap, rejection of items without an embedding, `build_topics` labeling/ordering, decode and scoping in `chunks_with_embeddings`, and the MCP tool `list_topics`.
 
 ## CI — pytest + ruff (2026-06-11)
 
-افزودن یک pipeline یکپارچه‌سازی (CI) تا کد خراب به `main` نرود؛ پیش‌تر GitHub Actions فقط deploy می‌کرد.
+Adding a continuous integration (CI) pipeline so that broken code doesn't reach `main`; previously, GitHub Actions only handled deploys.
 
 ### CI
-- workflow جدید `.github/workflows/ci.yml` روی هر push و pull_request: نصب وابستگی‌ها، سپس `ruff check` و `pytest`.
-- کل سوییت (۷۳ تست) در CI اجرا می‌شود؛ `test_telegram_client` هم بدون نیاز به اجرای واقعی Telethon پاس می‌شود (importها lazy هستند).
+- A new workflow `.github/workflows/ci.yml` on every push and pull_request: install dependencies, then `ruff check` and `pytest`.
+- The full suite (73 tests) runs in CI; `test_telegram_client` also passes without actually running Telethon (imports are lazy).
 
 ### Lint
-- پیکربندی `ruff` در `pyproject.toml` (rule set `E,F,I,UP,B`؛ `line-length=140`) و افزودن `ruff` به dev dependencies.
-- رفع همه‌ی یافته‌های lint: حذف importهای بلااستفاده، مرتب‌سازی importها، `datetime.UTC`، `zip(..., strict=True)` در مسیرهای crypto/cosine، `raise ... from` در except، و annotation امن `TelegramClient` زیر `TYPE_CHECKING`.
+- `ruff` configuration in `pyproject.toml` (rule set `E,F,I,UP,B`; `line-length=140`) and adding `ruff` to dev dependencies.
+- Fixing all lint findings: removing unused imports, sorting imports, `datetime.UTC`, `zip(..., strict=True)` in the crypto/cosine paths, `raise ... from` in except blocks, and a safe `TelegramClient` annotation under `TYPE_CHECKING`.
 
 ### Run locally
 ```bash
@@ -292,190 +292,190 @@ pytest -q
 
 ## Phase 8 — MCP Server (2026-06-09)
 
-فاز آخر Roadmap: یک MCP Server فقط-خواندنی تا آرشیو تلگرام کاربر به ابزارهای AI دیگر وصل شود.
+The final phase of the Roadmap: a read-only MCP Server so that the user's Telegram archive can be connected to other AI tools.
 
 ### Behaviour
-- ماژول جدید `mcp_server.py`: JSON-RPC 2.0 روی stdio، فقط با کتابخانه‌ی استاندارد (بدون وابستگی جدید). `handle_request` تابع خالص dict→dict است و `serve_stdio` یک حلقه‌ی newline-delimited نازک روی آن.
-- متدهای پروتکل: `initialize` (protocolVersion، serverInfo، capabilities.tools)، `notifications/initialized` (بدون پاسخ)، `tools/list`، `tools/call`.
-- ابزارها (همه read-only): `list_sources`، `list_tags`، `search_telegram_archive` (با فیلتر source/tag)، `get_message` (متن کامل یک آیتم با `media_item_id`)، `ask_telegram_notebook` (RAG)، `summarize_source`.
-- scoped به یک owner از `MCP_OWNER_ID` (پیش‌فرض `0` = آرشیو وب). همه‌ی کوئری‌ها از ایزولاسیون `owner_id` عبور می‌کنند.
-- اجرا: `python -m telegram_notebook.mcp_server`.
+- A new `mcp_server.py` module: JSON-RPC 2.0 over stdio, using only the standard library (no new dependencies). `handle_request` is a pure dict→dict function, and `serve_stdio` is a thin newline-delimited loop on top of it.
+- Protocol methods: `initialize` (protocolVersion, serverInfo, capabilities.tools), `notifications/initialized` (no response), `tools/list`, `tools/call`.
+- Tools (all read-only): `list_sources`, `list_tags`, `search_telegram_archive` (with a source/tag filter), `get_message` (the full text of an item by `media_item_id`), `ask_telegram_notebook` (RAG), `summarize_source`.
+- Scoped to a single owner from `MCP_OWNER_ID` (default `0` = the web archive). All queries pass through `owner_id` isolation.
+- Run: `python -m telegram_notebook.mcp_server`.
 
 ### Repository
-- متد جدید `get_media_item(owner_id, media_item_id)` برای ابزار `get_message`.
+- A new method `get_media_item(owner_id, media_item_id)` for the `get_message` tool.
 
 ### Tests
-- `tests/test_mcp_server.py`: initialize/tools-list، رفتار notification، خطای method ناشناخته، list_sources/search/get_message، ابزار ناشناخته (isError)، ایزولاسیون per-owner، و roundtrip کامل `serve_stdio`.
+- `tests/test_mcp_server.py`: initialize/tools-list, notification behaviour, unknown-method error, list_sources/search/get_message, an unknown tool (isError), per-owner isolation, and a full `serve_stdio` roundtrip.
 
 ## Phase 7 — Summaries / NotebookLM (2026-06-09)
 
-خلاصه‌سازی آرشیو از Roadmap (summary per source و per tag).
+Archive summarization from the Roadmap (summary per source and per tag).
 
 ### Behaviour
-- `/summarize [--source <url>] [--tag <tag>]` — اگر فیلتری ندهید کل آرشیو، با `--source` یک منبع، و با `--tag` یک تگ خلاصه می‌شود (از همان پارسر `_split_filters`).
-- محتوا (یک ردیف به‌ازای هر آیتم، با متن و منبع) از `Repository.summary_items` گرفته می‌شود (scoped به owner + source/tag، با محدودیت پیش‌فرض ۲۰۰ آیتم).
-- خلاصه با `SearchService.summarize` ساخته می‌شود؛ prompt در `_build_summary_prompt` (تابع خالص) با ذکر منابع و کوتاه‌سازی متن هر آیتم تولید و به `gemini_generate_content` داده می‌شود.
+- `/summarize [--source <url>] [--tag <tag>]` — with no filter, the entire archive is summarized; with `--source`, a single source; and with `--tag`, a single tag (using the same `_split_filters` parser).
+- The content (one row per item, with text and source) is fetched from `Repository.summary_items` (scoped to owner + source/tag, with a default limit of 200 items).
+- The summary is built with `SearchService.summarize`; the prompt is produced in `_build_summary_prompt` (a pure function) with sources noted and each item's text truncated, and is passed to `gemini_generate_content`.
 
 ### Outside scope (follow-up)
-- topic clustering و timeline خودکار.
+- Topic clustering and an automatic timeline.
 
 ### Tests
-- `tests/test_summarize.py`: ساخت prompt (شامل منابع و scope، کوتاه‌سازی متن)، پیام خالی، و scoping متد `summary_items` (کل/تگ/منبع و ایزولاسیون per-user).
+- `tests/test_summarize.py`: building the prompt (including sources and scope, text truncation), the empty message, and the scoping of the `summary_items` method (all/tag/source and per-user isolation).
 
 ## Phase 6 — Full Import Jobs (2026-06-09)
 
-import کامل کانال از Roadmap: صف، background worker، progress tracking، resume بعد از قطع‌شدن، و لغو.
+Full channel import from the Roadmap: a queue, a background worker, progress tracking, resume after interruption, and cancellation.
 
 ### Data model
-- جدول `jobs` (`owner_id`, `channel_url`, `status`, `total`, `processed`, `cursor`, `limit_count`, `error`, `cancel_requested`, زمان‌ها). status یکی از `queued|running|done|failed|cancelled`.
-- متدهای repository: `create_job`, `get_job`, `list_jobs`, `claim_next_queued_job` (انتخاب اتمیک قدیمی‌ترین job و انتقال به running)، `update_job_progress`, `finish_job`, `request_job_cancel`, `is_cancel_requested`, و `requeue_running_jobs` (بازگرداندن jobهای running جامانده از worker کرش‌کرده به queued).
+- The `jobs` table (`owner_id`, `channel_url`, `status`, `total`, `processed`, `cursor`, `limit_count`, `error`, `cancel_requested`, timestamps). status is one of `queued|running|done|failed|cancelled`.
+- Repository methods: `create_job`, `get_job`, `list_jobs`, `claim_next_queued_job` (atomically selecting the oldest job and moving it to running), `update_job_progress`, `finish_job`, `request_job_cancel`, `is_cancel_requested`, and `requeue_running_jobs` (returning running jobs orphaned by a crashed worker back to queued).
 
 ### Worker
-- ماژول جدید `jobs.py` با `JobWorker` (یک thread دیمن). از Telegram جدا و با یک `runner` تزریق‌شده کار می‌کند تا state machine به‌طور کامل unit-testable باشد.
-- روی استارت، jobهای running جامانده را requeue می‌کند (resume بعد از کرش).
+- A new `jobs.py` module with `JobWorker` (a single daemon thread). It is decoupled from Telegram and works with an injected `runner` so that the state machine is fully unit-testable.
+- On startup, it requeues orphaned running jobs (resume after a crash).
 
 ### Pipeline
-- `ingest_channel` پارامترهای `resume_from` (min_id برای ادامه)، `progress_cb(processed, total, last_msg_id)` و `should_cancel()` گرفت. به‌ازای هر پیام، cancel چک و progress/cursor به‌روزرسانی می‌شود. به‌خاطر idempotent بودن ذخیره‌سازی، resume امن است.
-- `iter_all_messages` پارامتر `min_id` گرفت و `limit` حالا اختیاری (`None` = همه‌ی پیام‌ها).
+- `ingest_channel` gained the parameters `resume_from` (min_id for continuation), `progress_cb(processed, total, last_msg_id)`, and `should_cancel()`. For each message, cancellation is checked and progress/cursor is updated. Because storage is idempotent, resume is safe.
+- `iter_all_messages` gained a `min_id` parameter, and `limit` is now optional (`None` = all messages).
 
 ### Bot
-- `/import <channel_url> [limit]` (صف‌کردن import کامل/resumable)، `/jobs` (وضعیت و پیشرفت)، `/canceljob <id>`.
-- `/ingest` به‌عنوان مسیر سریع inline باقی می‌ماند. worker در `run_forever` استارت می‌شود و در پایان هر job پیام done/failed/cancelled به کاربر می‌فرستد.
-- `/help` به‌روزرسانی شد.
+- `/import <channel_url> [limit]` (queueing a full/resumable import), `/jobs` (status and progress), `/canceljob <id>`.
+- `/ingest` remains the fast inline path. The worker is started in `run_forever` and, at the end of each job, sends a done/failed/cancelled message to the user.
+- `/help` was updated.
 
 ### Tests
-- `tests/test_jobs.py`: چرخه‌ی حیات job، claim اتمیک و ترتیب، progress/cancel/requeue، و state machine worker با runner جعلی (done/failed/cancelled و انتقال cursor برای resume).
+- `tests/test_jobs.py`: the job lifecycle, atomic claim and ordering, progress/cancel/requeue, and the worker state machine with a fake runner (done/failed/cancelled and cursor advancement for resume).
 
 ## Phase 5 — Rules + Tags (2026-06-09)
 
-موتور قانون (Rule Engine) و سیستم تگ از Roadmap. کاربر قانون keyword→tag تعریف می‌کند و محتوای واردشده به‌صورت خودکار تگ می‌خورد و قابل فیلتر در جستجو/پرسش می‌شود.
+The Rule Engine and tag system from the Roadmap. The user defines a keyword→tag rule and incoming content is tagged automatically and can be filtered in search/ask.
 
 ### Data model
-- جدول `rules` (`owner_id`, `keyword`, `tag`, `created_at`) با ایندکس یکتای `(owner_id, keyword, tag)`.
-- جدول `content_tags` (`owner_id`, `media_item_id`, `tag`) با primary key ترکیبی (تگ‌گذاری idempotent).
-- هر دو با `CREATE TABLE IF NOT EXISTS` ساخته می‌شوند؛ برای دیتابیس‌های موجود نیازی به مهاجرت خاص نیست.
+- The `rules` table (`owner_id`, `keyword`, `tag`, `created_at`) with a unique index on `(owner_id, keyword, tag)`.
+- The `content_tags` table (`owner_id`, `media_item_id`, `tag`) with a composite primary key (idempotent tagging).
+- Both are created with `CREATE TABLE IF NOT EXISTS`; no special migration is needed for existing databases.
 
 ### Matching & auto-tagging
-- ماژول جدید `rules.py` با تابع خالص `match_tags(text, rules)` (substring، case-insensitive).
-- pipeline در هر سه مسیر ingest (متن کانال، transcript مدیا، Forwarded Inbox) بعد از ذخیره‌ی متن، قوانین owner را اعمال و تگ‌ها را ذخیره می‌کند (`_apply_rules`). `owner_id` به helperهای داخلی pipeline اضافه شد.
+- A new `rules.py` module with the pure function `match_tags(text, rules)` (substring, case-insensitive).
+- In all three ingest paths (channel text, media transcript, Forwarded Inbox), after storing the text the pipeline applies the owner's rules and stores the tags (`_apply_rules`). `owner_id` was added to the pipeline's internal helpers.
 
 ### Bot commands
-- `/rule add <keyword> -> <tag>`، `/rule list`، `/rule remove <id>`، و `/rule apply` (پاک‌کردن و بازمحاسبه‌ی تگ‌ها از روی متن‌های ذخیره‌شده).
-- `/tags` — تگ‌ها و تعداد آیتم متمایز هر تگ.
-- فیلتر `--tag <tag>` برای `/search` و `/ask`. پارسر `_split_source` با `_split_filters` جایگزین شد که هم `--source` (تک‌توکن) و هم `--tag` (تا انتهای خط، چندکلمه‌ای) را می‌فهمد.
-- `/help` به‌روزرسانی شد.
+- `/rule add <keyword> -> <tag>`, `/rule list`, `/rule remove <id>`, and `/rule apply` (clearing and recomputing tags from the stored texts).
+- `/tags` — the tags and the distinct item count for each tag.
+- A `--tag <tag>` filter for `/search` and `/ask`. The `_split_source` parser was replaced with `_split_filters`, which understands both `--source` (single token) and `--tag` (to the end of the line, multi-word).
+- `/help` was updated.
 
 ### Search
-- `SearchService.search` پارامتر `tag` گرفت. مسیر keyword با join روی `content_tags` فیلتر می‌شود؛ مسیر معنایی (Vertex) با allowlist از `media_ids_for_tag` پس‌فیلتر می‌شود.
+- `SearchService.search` gained a `tag` parameter. The keyword path is filtered with a join on `content_tags`; the semantic path (Vertex) is post-filtered with an allowlist from `media_ids_for_tag`.
 
 ### Tests
-- `tests/test_rules.py`: تطبیق خالص، پارس `/rule add`، CRUD قوانین و یکتایی، ذخیره/شمارش تگ، تگ‌گذاری خودکار هنگام ingest، جستجوی فیلترشده با تگ، و backfill.
-- `tests/test_normalize.py`: تست `_split_filters` (به‌جای `_split_source`).
+- `tests/test_rules.py`: pure matching, parsing `/rule add`, rule CRUD and uniqueness, tag storage/counting, automatic tagging on ingest, tag-filtered search, and backfill.
+- `tests/test_normalize.py`: testing `_split_filters` (instead of `_split_source`).
 
 ## Phase 4 — Forwarded Inbox (MVP) (2026-06-09)
 
-پیاده‌سازی فاز بعدی Roadmap: «Smart Telegram Inbox». حالا کاربر می‌تواند هر پیامی را به ربات فوروارد کند و متن/کپشن آن در یک inbox شخصی و قابل‌جستجو ذخیره می‌شود.
+Implementing the next Roadmap phase: the "Smart Telegram Inbox". The user can now forward any message to the bot, and its text/caption is stored in a personal, searchable inbox.
 
 ### Behaviour
-- ربات پیام‌های فورواردشده را تشخیص می‌دهد (هم فرمت جدید `forward_origin` و هم فیلدهای legacy مثل `forward_from`/`forward_from_chat`/`forward_sender_name`) و قبل از منطق auth-flow مسیر می‌دهد، بنابراین با پاسخ‌های متنی فرایند `/connect` تداخل ندارد.
-- متن (`text`) یا `caption` فوروارد، همراه با یک تگ نوع مدیا (مثلاً `[Forwarded document: report.pdf]`) و منبع (نام کانال/کاربر مبدأ) ذخیره می‌شود.
-- وقتی مبدأ یک کانال عمومی باشد، لینک `https://t.me/<username>/<id>` به‌عنوان منبع ساخته می‌شود.
-- محتوای ذخیره‌شده از طریق همان `/search` و `/ask` قابل پرس‌وجوست (chunk + embedding، با fallback به keyword اگر embedding در دسترس نباشد).
+- The bot detects forwarded messages (both the new `forward_origin` format and legacy fields such as `forward_from`/`forward_from_chat`/`forward_sender_name`) and routes them before the auth-flow logic, so it doesn't conflict with text replies in the `/connect` flow.
+- The forward's `text` or `caption`, along with a media-type tag (e.g. `[Forwarded document: report.pdf]`) and the source (the origin channel/user name), is stored.
+- When the origin is a public channel, the link `https://t.me/<username>/<id>` is built as the source.
+- The stored content is queryable through the same `/search` and `/ask` (chunk + embedding, with a keyword fallback if no embedding is available).
 
 ### Data model
-- inbox به‌صورت یک «کانال» مصنوعی per-user با `channel_url = inbox://forwarded` پیاده شده تا از schema و مسیر جستجوی موجود (و ایزولاسیون `owner_id` فاز ۲) دوباره استفاده شود.
-- متد جدید `IngestionPipeline.ingest_forwarded_message` (idempotent بر اساس message_id فوروارد).
+- The inbox is implemented as a synthetic per-user "channel" with `channel_url = inbox://forwarded`, reusing the existing schema and search path (and the Phase 2 `owner_id` isolation).
+- A new method `IngestionPipeline.ingest_forwarded_message` (idempotent based on the forward's message_id).
 
 ### Bot UX
-- `/start` و `/help` به‌روزرسانی شدند تا قابلیت فوروارد را توضیح دهند.
-- پیام راهنما برای آیتم‌های فقط-مدیا بدون متن (که در این نسخه هنوز ایندکس نمی‌شوند).
-- refactor: ساخت Vertex-config مربوط به ایندکس در یک helper مشترک (`_vertex_ingest_config`) جمع شد تا `/ingest` و inbox از آن استفاده کنند.
+- `/start` and `/help` were updated to explain the forwarding capability.
+- A guidance message for media-only items without text (which are not yet indexed in this version).
+- Refactor: the index-related Vertex config was consolidated into a shared helper (`_vertex_ingest_config`) so that `/ingest` and the inbox both use it.
 
-### خارج از scope (follow-up)
-- دانلود و transcription مدیای فورواردشده از طریق Bot API، OCR عکس‌ها، و استخراج متن از PDF/DOCX/Excel.
+### Outside scope (follow-up)
+- Downloading and transcribing forwarded media via the Bot API, OCR for photos, and text extraction from PDF/DOCX/Excel.
 
 ### Tests
-- `tests/test_forwarded.py`: تشخیص فوروارد، استخراج منبع/لینک/تگ مدیا، و ingest end-to-end (ذخیره و جستجوپذیری، idempotency، و per-user بودن inbox).
+- `tests/test_forwarded.py`: forward detection, extraction of the source/link/media tag, and end-to-end ingest (storage and searchability, idempotency, and the per-user nature of the inbox).
 
 ## Phase 3 — Web API Auth & Secret Encryption (2026-06-09)
 
-دو مورد امنیتی باقی‌مانده از تحلیل: احراز هویت Web API و رمزنگاری secrets در دیتابیس.
+The two remaining security items from the analysis: Web API authentication and encryption of secrets in the database.
 
 ### Web API authentication
-- متغیر جدید `WEB_API_TOKEN`. وقتی تنظیم شده باشد، همه‌ی endpointهای `/api/*` (به‌جز `/api/health`) به توکن نیاز دارند؛ توکن از طریق `Authorization: Bearer <token>` یا هدر `X-API-Token` ارسال می‌شود (مقایسه‌ی constant-time).
-- وقتی توکن تنظیم نشده باشد، API فقط درخواست‌های loopback (localhost) را می‌پذیرد و دسترسی شبکه‌ای بدون احراز هویت با ۴۰۱ رد می‌شود (secure-by-default؛ پیش‌تر کاملاً باز بود).
-- `/api/health` برای healthcheck داکر عمومی می‌ماند.
-- UI داشبورد: همه‌ی فراخوانی‌ها از `fetchJson` عبور می‌کنند؛ این تابع توکن را از `localStorage` می‌فرستد و در پاسخ ۴۰۱ یک‌بار از کاربر توکن می‌پرسد و ذخیره می‌کند.
+- A new variable `WEB_API_TOKEN`. When set, all `/api/*` endpoints (except `/api/health`) require the token; the token is sent via `Authorization: Bearer <token>` or the `X-API-Token` header (constant-time comparison).
+- When no token is set, the API accepts only loopback (localhost) requests, and unauthenticated network access is rejected with a 401 (secure-by-default; previously it was completely open).
+- `/api/health` stays public for the Docker healthcheck.
+- Dashboard UI: all calls go through `fetchJson`; this function sends the token from `localStorage` and, on a 401 response, prompts the user once for a token and stores it.
 
 ### Secret encryption at rest
-- ماژول جدید `crypto.py`: رمزنگاری authenticated فقط با کتابخانه‌ی استاندارد (جداسازی کلید با HKDF-SHA256، keystream با HMAC-SHA256 در حالت CTR، و Encrypt-then-MAC با HMAC-SHA256؛ nonce تصادفی ۱۲۸ بیتی برای هر مقدار). بدون هیچ وابستگی جدید.
-- ستون‌های حساس قبل از ذخیره در SQLite رمز می‌شوند: در `bot_users` → `api_hash`, `session_string`, `gemini_api_key`؛ در `auth_flows` → `api_hash`, `session_string`, `phone_code_hash`. خواندن (`get_bot_user`/`get_auth_flow`) به‌صورت شفاف رمزگشایی می‌کند.
-- کلید از `SECRETS_KEY` خوانده می‌شود. اگر تنظیم نشده باشد، رمزنگاری no-op است (با هشدار) و دیتابیس‌های plaintext قدیمی همچنان کار می‌کنند؛ مقادیر رمزشده با پیشوند `enc::` از plaintext قدیمی تفکیک می‌شوند تا مهاجرت بدون دردسر باشد.
+- A new `crypto.py` module: authenticated encryption using only the standard library (key separation with HKDF-SHA256, a keystream with HMAC-SHA256 in CTR mode, and Encrypt-then-MAC with HMAC-SHA256; a random 128-bit nonce for each value). With no new dependencies.
+- Sensitive columns are encrypted before storage in SQLite: in `bot_users` → `api_hash`, `session_string`, `gemini_api_key`; in `auth_flows` → `api_hash`, `session_string`, `phone_code_hash`. Reading (`get_bot_user`/`get_auth_flow`) decrypts transparently.
+- The key is read from `SECRETS_KEY`. If it is not set, encryption is a no-op (with a warning) and old plaintext databases keep working; encrypted values are distinguished from old plaintext by the `enc::` prefix to make migration painless.
 
 ### Tests
-- `tests/test_crypto.py`: roundtrip، non-determinism، رد tampering/کلید اشتباه، passthrough برای None/خالی/plaintext قدیمی، و رفتار no-op بدون کلید.
-- `tests/test_web_auth.py`: پذیرش bearer/`X-API-Token`، رد توکن غلط/نبود توکن، و محدودیت loopback وقتی توکن تنظیم نشده.
-- `tests/test_db.py`: تست‌های جدید برای ذخیره‌ی رمزشده‌ی secrets و رمزگشایی شفاف هنگام خواندن.
+- `tests/test_crypto.py`: roundtrip, non-determinism, rejection of tampering/wrong key, passthrough for None/empty/old plaintext, and the no-op behaviour without a key.
+- `tests/test_web_auth.py`: acceptance of bearer/`X-API-Token`, rejection of a wrong/missing token, and the loopback restriction when no token is set.
+- `tests/test_db.py`: new tests for encrypted storage of secrets and transparent decryption on read.
 
 ### .env.example
-- افزوده‌شدن `WEB_API_TOKEN` و `SECRETS_KEY` همراه با دستور تولید مقدار.
+- Adding `WEB_API_TOKEN` and `SECRETS_KEY` along with the command to generate a value.
 
 ## Phase 2 — Per-user Data Isolation (2026-06-09)
 
-تمرکز این فاز روی رفع نشت داده بین کاربران است: تا پیش از این `/search` و `/ask` (و Web API) روی **همه‌ی** کانال‌های دیتابیس کار می‌کردند و کاربران دیتای یکدیگر را می‌دیدند.
+The focus of this phase is fixing data leakage between users: previously, `/search` and `/ask` (and the Web API) operated on **all** channels in the database, and users could see each other's data.
 
 ### Data model
-- ستون `owner_id` به جدول `channels` اضافه شد و مالکیت در همین سطح اعمال می‌شود؛ چون هر `message`/`media_item`/`chunk` از طریق FK به یک کانال وصل است، فیلتر روی `channels.owner_id` در joinها داده را به‌طور کامل ایزوله می‌کند.
-- قید سراسری `UNIQUE(channel_url)` با ایندکس ترکیبی `UNIQUE(owner_id, channel_url)` جایگزین شد تا دو کاربر بتوانند مستقل از هم یک کانال یکسان را ingest کنند بدون اینکه ردیف مشترک شوند.
-- مهاجرت خودکار (`Repository._ensure_channel_owner`) برای دیتابیس‌های قدیمی: جدول `channels` بازسازی می‌شود، ستون `owner_id` اضافه می‌گردد و ردیف‌های legacy با `owner_id = NULL` می‌مانند؛ یعنی به‌جای نشت بین کاربران، برای کوئری‌های per-user نامرئی می‌شوند (در صورت نیاز باید دوباره ingest شوند).
+- An `owner_id` column was added to the `channels` table and ownership is enforced at this level; because every `message`/`media_item`/`chunk` is linked to a channel via an FK, filtering on `channels.owner_id` in joins fully isolates the data.
+- The global `UNIQUE(channel_url)` constraint was replaced with a composite `UNIQUE(owner_id, channel_url)` index so that two users can independently ingest the same channel without sharing a row.
+- An automatic migration (`Repository._ensure_channel_owner`) for old databases: the `channels` table is rebuilt, the `owner_id` column is added, and legacy rows are kept with `owner_id = NULL`; that is, instead of leaking between users, they become invisible to per-user queries (and must be re-ingested if needed).
 
 ### Scope enforcement
-- متدهای repository که داده برمی‌گردانند یا حذف می‌کنند حالا `owner_id` می‌گیرند: `upsert_channel`, `keyword_candidates`, `embedding_candidates`, `list_channels`, `delete_channel_data`, `get_chunk_by_media_and_index`.
-- `SearchService.search` و `IngestionPipeline.ingest_channel` پارامتر `owner_id` می‌گیرند.
-- ربات تلگرام `bot_user_id` کاربر را به‌عنوان `owner_id` پاس می‌دهد؛ بنابراین `/search`, `/ask`, `/ingest`, `/sources`, `/delete`, `/status` فقط روی دیتای همان کاربر کار می‌کنند.
-- داشبورد وب (که login per-user ندارد) از یک `WEB_OWNER_ID = 0` ثابت استفاده می‌کند تا آرشیو آن از آرشیو کاربران ربات جدا بماند.
+- Repository methods that return or delete data now take `owner_id`: `upsert_channel`, `keyword_candidates`, `embedding_candidates`, `list_channels`, `delete_channel_data`, `get_chunk_by_media_and_index`.
+- `SearchService.search` and `IngestionPipeline.ingest_channel` take an `owner_id` parameter.
+- The Telegram bot passes the user's `bot_user_id` as `owner_id`; therefore `/search`, `/ask`, `/ingest`, `/sources`, `/delete`, `/status` operate only on that user's data.
+- The web dashboard (which has no per-user login) uses a fixed `WEB_OWNER_ID = 0` so its archive stays separate from the bot users' archives.
 
 ### Hardening
-- `LIMIT` در `keyword_candidates` به‌جای string-interpolation حالا با پارامتر bind می‌شود.
+- The `LIMIT` in `keyword_candidates` is now bound as a parameter instead of via string interpolation.
 
 ### Tests
-- تست‌های `Repository` برای پاس‌دادن `owner_id` به‌روزرسانی شدند.
-- تست جدید `test_data_is_isolated_per_owner`: دو کاربر با یک URL یکسان دیتای هم را نمی‌بینند و حذف یکی روی دیگری اثر ندارد.
-- تست جدید `test_migrates_legacy_channels_table_without_owner_id`: مهاجرت دیتابیس قدیمی بدون `owner_id`.
+- The `Repository` tests were updated to pass `owner_id`.
+- A new test `test_data_is_isolated_per_owner`: two users with the same URL don't see each other's data, and deleting one's has no effect on the other's.
+- A new test `test_migrates_legacy_channels_table_without_owner_id`: migration of an old database without `owner_id`.
 
 ## Phase 1 — Stabilize Core (2026-06-08)
 
-تمرکز این فاز طبق Roadmap داخل README روی پایدارسازی هسته است: امنیت، رفع باگ، دستورهای ربات، logging و تست.
+Per the Roadmap in the README, this phase focuses on stabilizing the core: security, bug fixes, bot commands, logging, and tests.
 
 ### Security
-- توکن واقعی ربات از `.env.example` حذف و خالی شد.
-  - ⚠️ این توکن قبلاً در history گیت ثبت شده (commit `5501fda`) و عملاً عمومی است. فقط خالی‌کردن فایل کافی نیست؛ باید همین حالا در **@BotFather** با `/revoke` توکن را باطل و توکن جدید بسازید.
-- شناسه‌های مخصوص محیط (`VERTEX_INDEX_ID`، `VERTEX_DEPLOYED_INDEX_ID`) در فایل نمونه خالی شدند.
+- The real bot token was removed from `.env.example` and emptied.
+  - ⚠️ This token was previously committed to git history (commit `5501fda`) and is effectively public. Emptying the file is not enough; you must immediately `/revoke` the token in **@BotFather** and create a new one.
+- Environment-specific identifiers (`VERTEX_INDEX_ID`, `VERTEX_DEPLOYED_INDEX_ID`) were emptied in the example file.
 
 ### Bug fixes
-- `/search` و `/ask`: کاربر با `bot_user_id` واقعی خوانده می‌شود، نه `chat_id` (در گروه‌ها این دو فرق دارند).
-- Web API: `/api/search` و `/api/ask` حالا `vertex_config` (و `project_id`/`region` برای ask) را پاس می‌دهند؛ پیش‌تر همیشه به keyword search سقوط می‌کردند.
-- پاسخ `/ask` در ربات از `<b>` (HTML) استفاده می‌کند تا با `parse_mode=HTML` درست نمایش داده شود (قبلاً `**` خام بود).
-- پیش‌فرض `DB_PATH` در `.env.example` با `config.py` یکی شد: `data/store.db`.
+- `/search` and `/ask`: the user is read by the real `bot_user_id`, not `chat_id` (in groups these two differ).
+- Web API: `/api/search` and `/api/ask` now pass `vertex_config` (and `project_id`/`region` for ask); previously they always fell back to keyword search.
+- The `/ask` response in the bot uses `<b>` (HTML) so it renders correctly with `parse_mode=HTML` (previously it was raw `**`).
+- The `DB_PATH` default in `.env.example` was aligned with `config.py`: `data/store.db`.
 
-### دستورهای جدید ربات
-- `/status` — وضعیت اتصال، کلید AI، پیکربندی Vertex و تعداد منابع ایندکس‌شده.
-- `/disconnect` — حذف session و credentialهای کاربر («delete my data»).
-- `/help` — فهرست دستورها.
-- دستورها دیگر با پسوند `@botname` و حروف بزرگ/کوچک مشکل ندارند و دیگر به‌اشتباه وارد flow اتصال نمی‌شوند.
-- guard برای ورودی خالی در `/search`، `/ask`، `/ingest`، `/join`، `/delete`.
+### New bot commands
+- `/status` — connection status, AI key, Vertex configuration, and the number of indexed sources.
+- `/disconnect` — deleting the user's session and credentials ("delete my data").
+- `/help` — the command list.
+- Commands no longer have issues with the `@botname` suffix and upper/lowercase, and no longer mistakenly enter the connection flow.
+- A guard for empty input in `/search`, `/ask`, `/ingest`, `/join`, `/delete`.
 
-### Logging و error handling
-- ماژول جدید `logging_config.py` با `setup_logging()` (سطح از `LOG_LEVEL`، پیش‌فرض INFO).
-- همه‌ی `print()`های دیباگ با `logging` جایگزین شدند؛ مقادیر حساس (شماره تلفن، کد ورود، `phone_code_hash`) دیگر لاگ نمی‌شوند.
-- یک update خراب دیگر کل polling ربات را متوقف نمی‌کند (لاگ می‌شود و ادامه می‌دهد).
+### Logging and error handling
+- A new `logging_config.py` module with `setup_logging()` (level from `LOG_LEVEL`, default INFO).
+- All debug `print()`s were replaced with `logging`; sensitive values (phone number, login code, `phone_code_hash`) are no longer logged.
+- A single broken update no longer halts the entire bot polling loop (it is logged and execution continues).
 
 ### Tests
-- مجموعه `tests/` با pytest؛ ۲۶ تست بدون نیاز به شبکه: `chunking`، cosine similarity، `normalize_phone`/`normalize_code`، canonical URL، ترکیب متن، sanitize نام کانال، `Repository` روی SQLite موقت، و `upsert_env_values`.
-- اجرا: `pip install -e ".[dev]"` سپس `pytest`.
+- A `tests/` suite with pytest; 26 tests with no network needed: `chunking`, cosine similarity, `normalize_phone`/`normalize_code`, canonical URL, text composition, channel-name sanitization, `Repository` on a temporary SQLite, and `upsert_env_values`.
+- Run: `pip install -e ".[dev]"` then `pytest`.
 
-### Follow-ups (برای فازهای بعد)
-- `normalize_phone` برای شماره‌های دارای کد کشور هنوز خام است (مثلاً `09123456789` → `+09123456789`).
-- `import re` در `bot.py` بعد از حذف regexها بلااستفاده مانده و قابل پاک‌کردن است.
-- `main.py` هنوز state سراسری را هنگام import می‌سازد؛ بهتر است lazy شود.
-- جداسازی per-user داده‌ها (Phase 2) هنوز انجام نشده: `/search` و `/ask` روی همه‌ی کانال‌ها کار می‌کنند، نه فقط دیتای همان کاربر.
+### Follow-ups (for later phases)
+- `normalize_phone` is still naive for numbers with a country code (e.g. `09123456789` → `+09123456789`).
+- `import re` in `bot.py` is left unused after removing the regexes and can be cleaned up.
+- `main.py` still builds global state at import time; it would be better to make it lazy.
+- Per-user data isolation (Phase 2) has not been done yet: `/search` and `/ask` operate on all channels, not only that user's data.
