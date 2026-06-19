@@ -133,11 +133,11 @@ state = AppState()
 
 INDEX_HTML = """
 <!doctype html>
-<html lang="fa">
+<html lang="fa" dir="rtl">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Telegram Notebook</title>
+    <title>Telegram Notebook — Dashboard</title>
     <style>
       :root {
         --bg: #f6f0e7;
@@ -344,9 +344,20 @@ INDEX_HTML = """
           </p>
           <label for="backupFile">Backup file (.json / .zip)</label>
           <input id="backupFile" type="file" accept=".json,.zip,application/json,application/zip" />
-          <button id="importBackupBtn" type="button">Import & Convert</button>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button id="importBackupBtn" type="button">Import & Convert</button>
+            <button id="convertBackupBtn" class="secondary" type="button">Convert only</button>
+          </div>
           <div class="status" id="backupStatus"></div>
           <div class="tiny" id="backupDownload" style="margin-top:10px;"></div>
+        </div>
+
+        <div class="card">
+          <h2>Sources</h2>
+          <p class="tiny">Channels, chats and backups indexed in this workspace, with item counts.</p>
+          <button id="loadSourcesBtn" type="button">Load sources</button>
+          <div class="status" id="sourcesStatus"></div>
+          <div class="results" id="sourcesList" style="margin-top:10px;"></div>
         </div>
       </section>
 
@@ -596,39 +607,73 @@ INDEX_HTML = """
 
       const backupFile = document.getElementById("backupFile");
       const importBackupBtn = document.getElementById("importBackupBtn");
+      const convertBackupBtn = document.getElementById("convertBackupBtn");
       const backupStatus = document.getElementById("backupStatus");
       const backupDownload = document.getElementById("backupDownload");
 
-      importBackupBtn.addEventListener("click", async () => {
+      async function runBackup(endpoint, importing) {
         const file = backupFile.files && backupFile.files[0];
         if (!file) {
           backupStatus.textContent = "اول یک فایل .json یا .zip انتخاب کن.";
           return;
         }
-        backupStatus.textContent = "در حال آپلود و پردازش... (ممکن است کمی طول بکشد)";
+        backupStatus.textContent = importing
+          ? "در حال آپلود و ایندکس... (ممکن است کمی طول بکشد)"
+          : "در حال تبدیل به Markdown...";
         backupDownload.innerHTML = "";
         try {
-          const data = await fetchJson("/api/backup/import", {
+          const data = await fetchJson(endpoint, {
             method: "POST",
-            headers: {
-              "content-type": "application/octet-stream",
-              "X-Filename": file.name,
-            },
+            headers: { "content-type": "application/octet-stream", "X-Filename": file.name },
             body: file,
           });
-          backupStatus.textContent =
-            `وارد شد: ${data.messages} پیام از ${data.chats} چت` +
-            (data.media ? ` (${data.media} مدیا OCR/رونویسی شد)` : "") +
-            `. حالا با Search/Ask قابل جستجوست.`;
+          if (importing) {
+            backupStatus.textContent =
+              `وارد شد: ${data.messages} پیام از ${data.chats} چت` +
+              (data.media ? ` (${data.media} مدیا OCR/رونویسی شد)` : "") +
+              `. حالا با Search/Ask قابل جستجوست.`;
+          } else {
+            backupStatus.textContent = `تبدیل شد: ${data.total_messages} پیام از ${data.chats} چت (بدون ایندکس).`;
+          }
           const blob = new Blob([data.markdown || ""], { type: "text/markdown" });
-          const url = URL.createObjectURL(blob);
           const link = document.createElement("a");
-          link.href = url;
+          link.href = URL.createObjectURL(blob);
           link.download = "telegram-backup.md";
           link.textContent = "دانلود فایل Markdown";
           backupDownload.appendChild(link);
         } catch (error) {
           backupStatus.textContent = error.message;
+        }
+      }
+
+      importBackupBtn.addEventListener("click", () => runBackup("/api/backup/import", true));
+      convertBackupBtn.addEventListener("click", () => runBackup("/api/backup/convert", false));
+
+      const loadSourcesBtn = document.getElementById("loadSourcesBtn");
+      const sourcesStatus = document.getElementById("sourcesStatus");
+      const sourcesList = document.getElementById("sourcesList");
+
+      loadSourcesBtn.addEventListener("click", async () => {
+        sourcesStatus.textContent = "در حال بارگذاری...";
+        sourcesList.innerHTML = "";
+        try {
+          const data = await fetchJson("/api/sources");
+          const sources = data.sources || [];
+          sourcesStatus.textContent = sources.length ? "" : "هنوز منبعی ایندکس نشده.";
+          for (const s of sources) {
+            const el = document.createElement("div");
+            el.className = "result";
+            const meta = document.createElement("div");
+            meta.className = "meta";
+            meta.textContent = `${s.items} item(s)`;
+            const body = document.createElement("div");
+            body.textContent = s.channel_title || s.channel_url;
+            el.appendChild(meta);
+            el.appendChild(body);
+            sourcesList.appendChild(el);
+          }
+        } catch (error) {
+          sourcesStatus.textContent = error.message;
         }
       });
 
@@ -943,18 +988,24 @@ class RequestHandler(BaseHTTPRequestHandler):
                 items = state.repository.timeline_items(owner_id=WEB_OWNER_ID)
                 self._send_json({"granularity": granularity, "periods": build_timeline(items, granularity=granularity)})
                 return
+            if parsed.path == "/api/sources":
+                if not self._require_auth():
+                    return
+                self._send_json({"sources": state.repository.source_counts(owner_id=WEB_OWNER_ID)})
+                return
             self._send_json({"detail": "Not found"}, status=HTTPStatus.NOT_FOUND)
         except Exception as exc:
             logger.exception("GET %s failed", parsed.path)
             self._send_json({"detail": str(exc)}, status=400)
 
-    def _handle_backup_import(self, parsed) -> None:
-        """Ingest an uploaded Telegram backup (raw .json/.zip body) and return Markdown.
+    def _handle_backup_upload(self, parsed, *, ingest: bool) -> None:
+        """Read an uploaded Telegram backup and return its Markdown.
 
         The file arrives as the raw request body with its name in ``X-Filename``
-        (or ``?filename=``), so there is no multipart parsing to do. The backup is
-        ingested into the shared web archive (``WEB_OWNER_ID``) and the response
-        carries import counts plus the Markdown rendering for the client to save.
+        (or ``?filename=``), so there is no multipart parsing to do. With
+        ``ingest=True`` the backup is also indexed into the shared web archive
+        (``WEB_OWNER_ID``) with media OCR/transcription; with ``ingest=False`` it
+        is only converted to Markdown (no indexing, no LLM calls).
         """
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length) if length else b""
@@ -967,23 +1018,23 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"detail": f"Could not read backup: {exc}"}, status=400)
             return
-        media = self._enrich_web_backup_media(chats, body, filename)
-        try:
-            result = asyncio.run(state.pipeline.ingest_backup(owner_id=WEB_OWNER_ID, chats=chats))
-        except Exception as exc:
-            logger.exception("Backup import failed")
-            self._send_json({"detail": str(exc)}, status=400)
-            return
-        self._send_json(
-            {
-                "ok": True,
-                "chats": result["chats"],
-                "messages": result["messages"],
-                "media": media,
-                "total_messages": count_messages(chats),
-                "markdown": render_markdown(chats),
-            }
-        )
+
+        payload: dict[str, object] = {
+            "ok": True,
+            "chats": len(chats),
+            "total_messages": count_messages(chats),
+        }
+        if ingest:
+            payload["media"] = self._enrich_web_backup_media(chats, body, filename)
+            try:
+                result = asyncio.run(state.pipeline.ingest_backup(owner_id=WEB_OWNER_ID, chats=chats))
+            except Exception as exc:
+                logger.exception("Backup import failed")
+                self._send_json({"detail": str(exc)}, status=400)
+                return
+            payload["messages"] = result["messages"]
+        payload["markdown"] = render_markdown(chats)
+        self._send_json(payload)
 
     def _enrich_web_backup_media(self, chats, body: bytes, filename: str | None) -> int:
         """OCR/transcribe media bundled in a backup zip for the web import path.
@@ -1033,11 +1084,11 @@ class RequestHandler(BaseHTTPRequestHandler):
         if not self._require_auth():
             return
 
-        if parsed.path == "/api/backup/import":
+        if parsed.path in ("/api/backup/import", "/api/backup/convert"):
             try:
-                self._handle_backup_import(parsed)
+                self._handle_backup_upload(parsed, ingest=parsed.path.endswith("/import"))
             except Exception as exc:
-                logger.exception("Backup import handler failed")
+                logger.exception("Backup upload handler failed")
                 self._send_json({"detail": str(exc)}, status=400)
             return
 

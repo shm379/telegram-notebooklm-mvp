@@ -410,6 +410,26 @@ class Repository:
                     "SELECT * FROM channels WHERE owner_id = ?", (owner_id,)
                 ).fetchall()]
 
+    def source_counts(self, *, owner_id: int) -> list[dict[str, Any]]:
+        """Each source (channel) with the number of indexed items it holds, busiest first."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT ch.channel_url, ch.channel_title, COUNT(mi.id) AS items
+                    FROM channels ch
+                    LEFT JOIN messages m ON m.channel_id = ch.id
+                    LEFT JOIN media_items mi ON mi.message_id = m.id
+                         AND mi.transcript_text IS NOT NULL AND mi.transcript_text != ''
+                    WHERE ch.owner_id = ?
+                    GROUP BY ch.id
+                    ORDER BY items DESC, ch.channel_title
+                    """,
+                    (owner_id,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+
     def delete_channel_data(self, *, owner_id: int, channel_url: str) -> bool:
         with self.lock:
             with sqlite3.connect(self.path) as conn:

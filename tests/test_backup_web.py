@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 
@@ -5,6 +6,7 @@ import telegram_notebook.main as web
 from telegram_notebook.db import Repository
 from telegram_notebook.embeddings import EmbeddingService
 from telegram_notebook.pipeline import IngestionPipeline
+from telegram_notebook.telegram_backup import parse_export
 
 SINGLE_CHAT = {
     "name": "My Channel",
@@ -67,6 +69,14 @@ def test_dashboard_has_backup_card():
     assert "/api/backup/import" in web.INDEX_HTML
 
 
+def test_dashboard_rtl_and_new_controls():
+    assert 'dir="rtl"' in web.INDEX_HTML
+    assert 'id="convertBackupBtn"' in web.INDEX_HTML
+    assert 'id="loadSourcesBtn"' in web.INDEX_HTML
+    assert "/api/backup/convert" in web.INDEX_HTML
+    assert "/api/sources" in web.INDEX_HTML
+
+
 def test_landing_has_backup_section():
     assert "Import" in web.LANDING_HTML and 'id="backup"' in web.LANDING_HTML
 
@@ -118,3 +128,33 @@ def test_backup_import_rejects_bad_json(monkeypatch, tmp_path):
     h = FakePost("/api/backup/import", body, {"Content-Length": str(len(body)), "X-Filename": "x.json"})
     h.do_POST()
     assert h.sent[0] == 400
+
+
+def test_backup_convert_endpoint_does_not_ingest(monkeypatch, tmp_path):
+    repo = _wire(monkeypatch, tmp_path)
+    body = json.dumps(SINGLE_CHAT).encode("utf-8")
+    headers = {"Content-Length": str(len(body)), "X-Filename": "result.json"}
+    h = FakePost("/api/backup/convert", body, headers)
+
+    h.do_POST()
+
+    status, payload = h.sent
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["markdown"].startswith("# Telegram Backup")
+    assert "messages" not in payload  # convert-only does not index
+    assert repo.keyword_candidates(owner_id=web.WEB_OWNER_ID, query="vertex", top_k=5, channel_url=None) == []
+
+
+def test_sources_endpoint(monkeypatch, tmp_path):
+    _wire(monkeypatch, tmp_path)
+    asyncio.run(web.state.pipeline.ingest_backup(owner_id=web.WEB_OWNER_ID, chats=parse_export(SINGLE_CHAT)))
+
+    h = FakeGet("/api/sources")
+    h.do_GET()
+
+    status, payload = h.sent
+    assert status == 200
+    sources = payload["sources"]
+    assert sources and sources[0]["items"] == 2
+    assert sources[0]["channel_url"] == "backup://555"
