@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,7 @@ import pytest
 from telegram_notebook.db import Repository
 from telegram_notebook.embeddings import EmbeddingService
 from telegram_notebook.office import extract_office_bytes
-from telegram_notebook.pipeline import IngestionPipeline
+from telegram_notebook.pipeline import IngestionPipeline, build_media_text_extractor
 from telegram_notebook.telegram_backup import (
     make_zip_file_resolver,
     parse_export,
@@ -137,6 +138,87 @@ def _pipeline(repo):
         transcription=None,
         embeddings=EmbeddingService(provider="openai", api_key=None, model="x"),
     )
+
+
+# --- OCR / transcription via an injected media_extractor ---
+
+def test_media_extractor_routes_image_pdf_and_audio():
+    msgs = [
+        _message(id=1, photo="photos/p.jpg"),                                         # image -> extract
+        _message(id=2, file="files/r.pdf", file_name="r.pdf", mime_type="application/pdf"),  # pdf -> extract
+        _message(id=3, media_type="voice_message", file="voice/a.ogg", mime_type="audio/ogg"),  # audio -> transcribe
+        _message(id=4, media_type="sticker", file="stickers/s.webp"),                 # skipped
+    ]
+    data = _export_zip(msgs, {
+        "photos/p.jpg": b"\xff\xd8IMG",
+        "files/r.pdf": b"%PDF-1.4",
+        "voice/a.ogg": b"OggS",
+        "stickers/s.webp": b"RIFF",
+    })
+    calls = []
+
+    def fake_extractor(route, name, blob):
+        calls.append((route, name, len(blob)))
+        return f"{route.upper()}::{name}"
+
+    chats = parse_export(
+        read_export(data, "e.zip"),
+        file_resolver=make_zip_file_resolver(data),
+        media_extractor=fake_extractor,
+    )
+    by_id = {m.id: m for m in chats[0].messages}
+    assert by_id[1].document_text == "EXTRACT::photo.jpg"   # photo with no file_name
+    assert by_id[2].document_text == "EXTRACT::r.pdf"
+    assert by_id[3].document_text == "TRANSCRIBE::a.ogg"
+    assert by_id[4].document_text == ""                    # sticker skipped
+    assert {c[0] for c in calls} == {"extract", "transcribe"} and len(calls) == 3
+
+
+def test_resolver_without_media_extractor_keeps_non_office_label_only():
+    # office still works locally, but image/pdf/audio need the extractor
+    msgs = [_message(id=1, file="files/r.pdf", file_name="r.pdf", mime_type="application/pdf")]
+    data = _export_zip(msgs, {"files/r.pdf": b"%PDF"})
+    chat = parse_export(read_export(data, "e.zip"), file_resolver=make_zip_file_resolver(data))[0]
+    assert chat.messages[0].document_text == ""
+
+
+# --- build_media_text_extractor (services-over-bytes adapter) ---
+
+class _FakeExtraction:
+    enabled = True
+
+    def extract(self, path):
+        return f"OCR:{Path(path).read_bytes().decode()}"
+
+
+class _FakeTranscription:
+    enabled = True
+
+    def transcribe_media(self, path, work_dir):
+        return f"TR:{Path(path).read_bytes().decode()}"
+
+
+def test_build_media_text_extractor_dispatches_and_cleans_up():
+    extractor = build_media_text_extractor(extraction=_FakeExtraction(), transcription=_FakeTranscription())
+    assert extractor("extract", "x.pdf", b"PDF") == "OCR:PDF"
+    assert extractor("transcribe", "x.ogg", b"AUD") == "TR:AUD"
+
+
+def test_build_media_text_extractor_none_when_no_service():
+    class _Off:
+        enabled = False
+
+    assert build_media_text_extractor(extraction=None, transcription=None) is None
+    assert build_media_text_extractor(extraction=_Off(), transcription=_Off()) is None
+
+
+def test_build_media_text_extractor_partial_service():
+    class _Off:
+        enabled = False
+
+    extractor = build_media_text_extractor(extraction=_FakeExtraction(), transcription=_Off())
+    assert extractor("extract", "p.png", b"IMG") == "OCR:IMG"
+    assert extractor("transcribe", "a.ogg", b"AUD") == ""  # transcription disabled
 
 
 def test_ingest_backup_makes_attached_docx_searchable(tmp_path):

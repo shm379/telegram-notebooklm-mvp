@@ -21,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from .media import route_media
 from .office import detect_office_kind, extract_office_bytes
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,11 @@ ZIP_MAGIC = b"PK\x03\x04"
 
 # Resolve an export-relative attachment path (e.g. "files/report.docx") to its bytes.
 FileResolver = Callable[[str], "bytes | None"]
+
+# Extract text from a non-office attachment given (route, file_name, data), where
+# route is "extract" (OCR/PDF) or "transcribe" (audio/video). Injected by the caller
+# that owns the Gemini/transcription services; office docs are handled locally.
+MediaExtractor = Callable[[str, str, bytes], str]
 
 
 @dataclass(slots=True)
@@ -104,22 +110,28 @@ def _read_result_json_from_zip(data: bytes) -> bytes:
 # --- parsing ---------------------------------------------------------------
 
 
-def parse_export(data: dict, *, file_resolver: FileResolver | None = None) -> list[ParsedChat]:
+def parse_export(
+    data: dict,
+    *,
+    file_resolver: FileResolver | None = None,
+    media_extractor: MediaExtractor | None = None,
+) -> list[ParsedChat]:
     """Normalize a single-chat or full-account export into ``ParsedChat`` list.
 
     When ``file_resolver`` is supplied (e.g. built from the export zip via
-    ``make_zip_file_resolver``), attached DOCX/XLSX documents are extracted to text
-    locally and folded into each message's searchable content.
+    ``make_zip_file_resolver``), attached files are turned into searchable text:
+    DOCX/XLSX are parsed locally, and — if a ``media_extractor`` is also given —
+    images/PDFs are OCR'd and audio/video are transcribed through it.
     """
     if not isinstance(data, dict):
         raise ValueError("Telegram export must be a JSON object.")
     if isinstance(data.get("messages"), list):
-        return [_parse_chat(data, file_resolver)]
+        return [_parse_chat(data, file_resolver, media_extractor)]
     chats = data.get("chats")
     if isinstance(chats, dict) and isinstance(chats.get("list"), list):
-        return [_parse_chat(c, file_resolver) for c in chats["list"] if isinstance(c, dict)]
+        return [_parse_chat(c, file_resolver, media_extractor) for c in chats["list"] if isinstance(c, dict)]
     if isinstance(chats, list):
-        return [_parse_chat(c, file_resolver) for c in chats if isinstance(c, dict)]
+        return [_parse_chat(c, file_resolver, media_extractor) for c in chats if isinstance(c, dict)]
     raise ValueError(
         "Unrecognized Telegram export. Expected a chat export (with 'messages') "
         "or a full export (with 'chats.list'). Export as 'Machine-readable JSON' "
@@ -127,17 +139,25 @@ def parse_export(data: dict, *, file_resolver: FileResolver | None = None) -> li
     )
 
 
-def _parse_chat(raw: dict, file_resolver: FileResolver | None = None) -> ParsedChat:
+def _parse_chat(
+    raw: dict,
+    file_resolver: FileResolver | None = None,
+    media_extractor: MediaExtractor | None = None,
+) -> ParsedChat:
     messages: list[ParsedMessage] = []
     for item in raw.get("messages", []) or []:
-        parsed = _parse_message(item, file_resolver)
+        parsed = _parse_message(item, file_resolver, media_extractor)
         if parsed is not None:
             messages.append(parsed)
     name = (raw.get("name") or "").strip() or "Telegram chat"
     return ParsedChat(name=name, type=raw.get("type"), id=raw.get("id"), messages=messages)
 
 
-def _parse_message(raw: object, file_resolver: FileResolver | None = None) -> ParsedMessage | None:
+def _parse_message(
+    raw: object,
+    file_resolver: FileResolver | None = None,
+    media_extractor: MediaExtractor | None = None,
+) -> ParsedMessage | None:
     if not isinstance(raw, dict):
         return None
     if raw.get("type") == "service":  # joined/pinned/etc. — no real content to index
@@ -155,31 +175,76 @@ def _parse_message(raw: object, file_resolver: FileResolver | None = None) -> Pa
         media_label=media_label(raw),
         forwarded_from=(raw.get("forwarded_from") or None),
         reply_to=reply_to if isinstance(reply_to, int) else None,
-        document_text=_attached_document_text(raw, file_resolver),
+        document_text=_attached_media_text(raw, file_resolver, media_extractor),
     )
 
 
-def _attached_document_text(raw: dict, file_resolver: FileResolver | None) -> str:
-    """Extract text from an attached DOCX/XLSX file, if the export bundled it.
+def _attachment(raw: dict) -> tuple[str, str, str | None, str] | None:
+    """Return ``(path, file_name, mime_type, media_kind)`` for the message's
+    attachment, or None. ``media_kind`` is the normalized kind ``route_media``
+    understands (image/audio/video/document); stickers are skipped.
+    """
+    photo = raw.get("photo")
+    if isinstance(photo, str) and photo:
+        return (photo, raw.get("file_name") or "photo.jpg", "image/jpeg", "image")
+    file_path = raw.get("file")
+    if not isinstance(file_path, str) or not file_path:
+        return None
+    name = raw.get("file_name") or file_path.rsplit("/", 1)[-1]
+    mime = raw.get("mime_type")
+    media_type = raw.get("media_type")
+    if media_type == "sticker":
+        return None
+    if media_type in ("voice_message", "audio_file"):
+        kind = "audio"
+    elif media_type in ("video_message", "video_file", "animation"):
+        kind = "video"
+    else:
+        kind = "document"
+    return (file_path, name, mime, kind)
 
-    Only office documents are handled here (parsed locally, no key needed); PDFs and
-    images would need the Gemini extractor and are left as a media label only.
+
+def _attached_media_text(
+    raw: dict,
+    file_resolver: FileResolver | None,
+    media_extractor: MediaExtractor | None,
+) -> str:
+    """Turn an attached file into searchable text, when the export bundled it.
+
+    DOCX/XLSX are parsed locally (no key). Images/PDFs (``extract``) and audio/video
+    (``transcribe``) are routed through the injected ``media_extractor``, so they
+    only run when the caller wired up the Gemini/transcription services.
     """
     if file_resolver is None:
         return ""
-    file_path = raw.get("file")
-    if not isinstance(file_path, str) or not file_path:
+    attachment = _attachment(raw)
+    if attachment is None:
         return ""
-    kind = detect_office_kind(raw.get("file_name") or file_path, raw.get("mime_type"))
-    if not kind:
+    path, name, mime, kind = attachment
+
+    office_kind = detect_office_kind(name, mime)
+    if office_kind:
+        blob = file_resolver(path)
+        if not blob:
+            return ""
+        try:
+            return extract_office_bytes(blob, office_kind).strip()
+        except Exception:
+            logger.exception("Failed to extract backup document %s", path)
+            return ""
+
+    if media_extractor is None:
         return ""
-    blob = file_resolver(file_path)
+    route = route_media(kind, mime, name)
+    if route not in ("extract", "transcribe"):
+        return ""
+    blob = file_resolver(path)
     if not blob:
         return ""
     try:
-        return extract_office_bytes(blob, kind).strip()
+        return (media_extractor(route, name, blob) or "").strip()
     except Exception:
-        logger.exception("Failed to extract backup document %s", file_path)
+        logger.exception("Failed to extract backup media %s", path)
         return ""
 
 

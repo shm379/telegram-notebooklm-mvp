@@ -17,7 +17,7 @@ from .embeddings import EmbeddingService
 from .extraction import ExtractionService
 from .logging_config import setup_logging
 from .model_catalog import ModelCatalogService
-from .pipeline import IngestionPipeline
+from .pipeline import IngestionPipeline, build_media_text_extractor
 from .recent import recent_rows
 from .search import SearchService
 from .telegram_backup import (
@@ -1116,7 +1116,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         filename = self.headers.get("X-Filename") or parse_qs(parsed.query).get("filename", [""])[0]
         try:
-            chats = parse_export(read_export(body, filename), file_resolver=make_zip_file_resolver(body))
+            resolver = make_zip_file_resolver(body)
+            media_extractor = build_media_text_extractor(
+                extraction=state.extraction, transcription=state.transcription
+            ) if resolver else None
+            chats = parse_export(
+                read_export(body, filename), file_resolver=resolver, media_extractor=media_extractor
+            )
         except Exception as exc:
             self._send_json({"detail": f"Could not read backup: {exc}"}, status=400)
             return
