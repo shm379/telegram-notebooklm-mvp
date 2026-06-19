@@ -27,10 +27,9 @@ from .search import SearchService
 from .telegram_backup import (
     count_messages,
     enrich_with_media,
+    load_backup,
     make_zip_extractor,
     open_backup_zip,
-    parse_export,
-    read_export,
     render_markdown,
 )
 from .timeline import build_timeline
@@ -370,12 +369,13 @@ INDEX_HTML = """
         <div class="card">
           <h2>Import Telegram Backup</h2>
           <p class="tiny">
-            در Telegram Desktop مسیر «Export chat history» را با فرمت
-            <b>Machine-readable JSON</b> بزن، سپس فایل <code>result.json</code> یا
-            <code>.zip</code> آن را اینجا آپلود کن تا قابل جستجو شود و یک نسخه‌ی Markdown بگیری.
+            در Telegram Desktop مسیر «Export chat history» را بزن (فرمت
+            <b>JSON</b> یا <b>HTML</b>)، سپس فایل <code>result.json</code>،
+            <code>messages.html</code> یا <code>.zip</code> آن را اینجا آپلود کن
+            تا قابل جستجو شود و یک نسخه‌ی Markdown بگیری.
           </p>
-          <label for="backupFile">Backup file (.json / .zip)</label>
-          <input id="backupFile" type="file" accept=".json,.zip,application/json,application/zip" />
+          <label for="backupFile">Backup file (.json / .html / .zip)</label>
+          <input id="backupFile" type="file" accept=".json,.zip,.html,.htm,application/json,application/zip,text/html" />
           <div style="display:flex; gap:10px; flex-wrap:wrap;">
             <button id="importBackupBtn" type="button">Import & Convert</button>
             <button id="convertBackupBtn" class="secondary" type="button">Convert only</button>
@@ -1141,7 +1141,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         filename = self.headers.get("X-Filename") or parse_qs(parsed.query).get("filename", [""])[0]
         try:
-            chats = parse_export(read_export(body, filename))
+            chats = load_backup(body, filename)
         except Exception as exc:
             self._send_json({"detail": f"Could not read backup: {exc}"}, status=400)
             return

@@ -30,10 +30,9 @@ from .stats import format_stats
 from .telegram_backup import (
     count_messages,
     enrich_with_media,
+    load_backup,
     make_zip_extractor,
     open_backup_zip,
-    parse_export,
-    read_export,
     render_markdown,
 )
 from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
@@ -1514,9 +1513,9 @@ class NotebookBot:
 
     @staticmethod
     def _is_backup_document(document: dict) -> bool:
-        """True for an uploaded ``.json``/``.zip`` that looks like a Telegram export."""
+        """True for an uploaded ``.json``/``.zip``/``.html`` that looks like a Telegram export."""
         name = (document.get("file_name") or "").lower()
-        if name.endswith((".json", ".zip")):
+        if name.endswith((".json", ".zip", ".html", ".htm")):
             return True
         mime = (document.get("mime_type") or "").lower()
         return mime in (
@@ -1524,15 +1523,17 @@ class NotebookBot:
             "application/zip",
             "application/x-zip-compressed",
             "application/x-zip",
+            "text/html",
         )
 
     def _handle_backup_info(self, chat_id: int) -> None:
         self.services.api.send_message(
             chat_id,
             "<b>Import a Telegram backup</b>\n"
-            "In Telegram Desktop: ⋮ → <b>Export chat history</b> → format "
-            "<b>Machine-readable JSON</b>. Then just send me the resulting "
-            "<code>result.json</code> (or a <code>.zip</code> of the export) as a file.\n\n"
+            "In Telegram Desktop: ⋮ → <b>Export chat history</b> (format "
+            "<b>JSON</b> or <b>HTML</b>). Then just send me the resulting "
+            "<code>result.json</code>, <code>messages.html</code>, or a "
+            "<code>.zip</code> of the export as a file.\n\n"
             "I'll make every message searchable (use /search and /ask) and send you "
             "back a Markdown copy. Files up to 20 MB work here; for bigger exports, "
             "use the website importer.",
@@ -1603,7 +1604,7 @@ class NotebookBot:
                 return
             local = self.services.api.download_file(str(file_path), tmpdir / file_name)
             data = local.read_bytes()
-            chats = parse_export(read_export(data, file_name))
+            chats = load_backup(data, file_name)
         except Exception as exc:
             logger.exception("Backup parse failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, f"I couldn't read that backup: {exc}")

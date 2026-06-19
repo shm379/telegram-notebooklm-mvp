@@ -1,5 +1,31 @@
 # Changelog
 
+## Backup follow-ups: media, web UX, accounts, HTML (2026-06-19)
+
+چهار توسعه روی import بکاپ و وب.
+
+### Media inside the zip
+- وقتی بکاپ یک `.zip` همراه مدیا باشد، عکس‌ها OCR و صوت/ویدیو/voice رونویسی می‌شوند (Gemini) و متن استخراج‌شده پیش از ایندکس به هر پیام اضافه می‌شود؛ پس مدیای بکاپ هم قابل‌جستجو می‌شود. در نبود کلید Gemini یا برای JSON خام no-op است. سقف ۲۰۰ فایل مدیا به‌ازای هر import.
+- `telegram_backup`: فیلدهای `media_path/media_kind/media_mime` روی `ParsedMessage`؛ `backup_media_route`, `open_backup_zip`, `resolve_zip_member`, `make_zip_extractor`, `enrich_with_media`. سرویس‌ها در `bot._enrich_backup_media` و `main._enrich_web_backup_media` wire می‌شوند.
+
+### Web UX
+- `GET /api/sources` + کارت Sources با شمارش آیتم هر منبع (`Repository.source_counts`).
+- `POST /api/backup/convert`: تبدیل بکاپ به Markdown بدون ایندکس (بدون LLM)؛ دکمه‌ی «Convert only». import/convert از `_handle_backup_upload` مشترک استفاده می‌کنند.
+- داشبورد حالا `dir="rtl"` است و تعداد مدیای پردازش‌شده را نشان می‌دهد.
+
+### Multi-user web app
+- کاربران وب می‌توانند ثبت‌نام/ورود کنند و آرشیو خصوصی و ایزوله بگیرند؛ دسترسی ناشناس همچنان روی workspace مشترک (owner 0) با `WEB_API_TOKEN`/loopback کار می‌کند.
+- ماژول `webauth.py` (هش PBKDF2-SHA256، توکن session، و `web_owner_id` در namespace منفی)؛ جداول `web_users`/`web_sessions`؛ session با کوکی `tgnb_session` (HttpOnly/SameSite=Lax)؛ endpointهای `POST /api/auth/{register,login,logout}` و `GET /api/auth/me`؛ helper `_authorize()` که owner هر درخواست را تعیین می‌کند. همه‌ی endpointهای داده per-owner شدند؛ `/api/settings` فقط admin می‌ماند. کارت Account در داشبورد.
+
+### HTML export support
+- علاوه بر JSON، خروجی پیش‌فرض **HTML** تلگرام (`messages*.html`) هم پارس می‌شود (با `html.parser`، بدون وابستگی جدید): نام چت، فرستنده، تاریخ کامل (از title)، متن (با inline‌کردن لینک‌ها) و برچسب مدیا. در zip، صفحات `messages*.html` هر پوشه در یک چت ادغام می‌شوند و اگر `result.json` باشد به آن اولویت داده می‌شود.
+- entry-point یکپارچه‌ی `load_backup(data, filename)` (JSON/HTML، خام یا zip) که ربات و وب از آن استفاده می‌کنند؛ تشخیص فایل بکاپ ربات و UI وب `.html` را هم می‌پذیرند.
+
+### Tests
+- `tests/test_telegram_backup.py`: routing/استخراج مدیای zip، و پارس HTML (تاریخ، joined/service، inline لینک، media label، ادغام صفحات zip، اولویت JSON).
+- `tests/test_backup_web.py`: `/api/sources`، convert-only، و markup جدید.
+- `tests/test_web_users.py`: webauth، CRUD کاربر/session، و کل جریان HTTP auth با ایزولاسیون آرشیو per-user.
+
 ## Telegram backup import + landing page + web app (2026-06-17)
 
 import فایل بکاپ تلگرام (JSON/ZIP) → آرشیو قابل‌جستجو + Markdown، به‌علاوه‌ی یک صفحه‌ی لندینگ و امکان استفاده از طریق وب‌سایت.

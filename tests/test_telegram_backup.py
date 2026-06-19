@@ -10,9 +10,11 @@ from telegram_notebook.db import Repository
 from telegram_notebook.embeddings import EmbeddingService
 from telegram_notebook.pipeline import IngestionPipeline
 from telegram_notebook.telegram_backup import (
+    _html_date_to_iso,
     backup_media_route,
     count_messages,
     enrich_with_media,
+    load_backup,
     make_zip_extractor,
     media_kind,
     media_label,
@@ -20,6 +22,7 @@ from telegram_notebook.telegram_backup import (
     message_text,
     open_backup_zip,
     parse_export,
+    parse_html_chat,
     read_export,
     render_markdown,
     resolve_zip_member,
@@ -311,3 +314,80 @@ def test_enrich_with_media_swallows_extractor_errors():
         raise RuntimeError("nope")
 
     assert enrich_with_media(chats, extract=boom) == 0
+
+
+# --- HTML export parsing ---------------------------------------------------
+
+HTML_EXPORT = """<!DOCTYPE html><html><head></head><body>
+<div class="page_header"><div class="content"><div class="text bold">My Chat</div></div></div>
+<div class="history">
+<div class="message default clearfix" id="message1"><div class="body">
+  <div class="pull_right date details" title="26.05.2021 18:03:43 UTC+03:00">18:03</div>
+  <div class="from_name">Alice</div>
+  <div class="text">hello <a href="https://example.com">link</a></div>
+</div></div>
+<div class="message default clearfix joined" id="message2"><div class="body">
+  <div class="pull_right date details" title="26.05.2021 18:04:00 UTC+03:00">18:04</div>
+  <div class="text">second message</div>
+</div></div>
+<div class="message service" id="message3"><div class="body details">Channel created</div></div>
+<div class="message default clearfix" id="message4"><div class="body">
+  <div class="pull_right date details" title="26.05.2021 18:05:00 UTC+03:00">18:05</div>
+  <div class="from_name">Bob</div>
+  <div class="media_wrap clearfix"><a class="media clearfix pull_left block_link media_photo"><div class="body"><div class="title bold">Photo</div><div class="status details">Not included</div></div></a></div>
+</div></div>
+</div></body></html>"""
+
+
+def test_html_date_to_iso():
+    assert _html_date_to_iso("26.05.2021 18:03:43 UTC+03:00") == "2021-05-26T18:03:43"
+    assert _html_date_to_iso("garbage") is None
+
+
+def test_parse_html_chat():
+    chat = parse_html_chat([HTML_EXPORT])
+    assert chat.name == "My Chat"
+    by_id = {m.id: m for m in chat.messages}
+    assert sorted(by_id) == [1, 2, 4]  # service message skipped
+    assert by_id[1].sender == "Alice"
+    assert by_id[1].date == "2021-05-26T18:03:43"
+    assert "hello link (https://example.com)" in by_id[1].text
+    assert by_id[2].sender == "Alice"  # "joined" reuses the previous sender
+    assert by_id[2].text == "second message"
+    assert by_id[4].sender == "Bob"
+    assert by_id[4].media_label == "[Photo]"
+    assert by_id[4].searchable_text == "[Photo]"
+
+
+def test_load_backup_html_bytes():
+    chats = load_backup(HTML_EXPORT.encode("utf-8"), "messages.html")
+    assert len(chats) == 1 and chats[0].name == "My Chat"
+
+
+def test_load_backup_html_in_zip_merges_pages():
+    page2 = (
+        HTML_EXPORT.replace('id="message1"', 'id="message10"')
+        .replace('id="message2"', 'id="message20"')
+        .replace('id="message4"', 'id="message40"')
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ChatExport/messages.html", HTML_EXPORT)
+        zf.writestr("ChatExport/messages2.html", page2)
+    chats = load_backup(buf.getvalue(), "export.zip")
+    assert len(chats) == 1  # two pages merged into one chat
+    assert {m.id for m in chats[0].messages} >= {1, 2, 4, 10, 20, 40}
+
+
+def test_load_backup_json_still_works():
+    chats = load_backup(json.dumps(SINGLE_CHAT).encode("utf-8"), "result.json")
+    assert chats[0].name == "My Channel"
+
+
+def test_load_backup_prefers_result_json_in_zip():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("X/result.json", json.dumps(SINGLE_CHAT))
+        zf.writestr("X/messages.html", HTML_EXPORT)
+    chats = load_backup(buf.getvalue(), "export.zip")
+    assert chats[0].name == "My Channel"  # JSON preferred over HTML
