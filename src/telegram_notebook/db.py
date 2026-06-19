@@ -8,6 +8,7 @@ from typing import Any
 
 from .crypto import decrypt as _decrypt
 from .crypto import encrypt as _encrypt
+from .keyword_search import query_terms
 
 # Columns holding secrets that are encrypted at rest (see crypto.py).
 _BOT_USER_SECRETS = ("api_hash", "session_string", "gemini_api_key")
@@ -379,7 +380,10 @@ class Repository:
                 return res and res[0] == 'done'
 
     def keyword_candidates(self, *, owner_id: int, query: str, top_k: int, channel_url: str | None, tag: str | None = None) -> list[dict[str, Any]]:
-        # جستجوی متنی سریع در SQLite
+        # Lexical search: match per-term (not the whole query as one substring) so
+        # natural-language questions still hit, then rank by how many distinct terms
+        # a chunk contains.
+        terms = query_terms(query)
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -389,9 +393,17 @@ class Repository:
                     JOIN media_items mi ON c.media_item_id = mi.id
                     JOIN messages m ON mi.message_id = m.id
                     JOIN channels ch ON m.channel_id = ch.id
-                    WHERE ch.owner_id = ? AND c.text LIKE ?
+                    WHERE ch.owner_id = ?
                 """
-                params: list[Any] = [owner_id, f"%{query}%"]
+                params: list[Any] = [owner_id]
+                if terms:
+                    sql += " AND (" + " OR ".join("c.text LIKE ?" for _ in terms) + ")"
+                    params.extend(f"%{t}%" for t in terms)
+                else:
+                    # No usable terms (e.g. punctuation/very short): fall back to the
+                    # whole query as a single substring.
+                    sql += " AND c.text LIKE ?"
+                    params.append(f"%{query}%")
                 if channel_url:
                     sql += " AND ch.channel_url = ?"
                     params.append(channel_url)
@@ -401,8 +413,16 @@ class Repository:
                     )"""
                     params.extend([owner_id, tag])
 
-                rows = conn.execute(sql + " LIMIT ?", params + [top_k]).fetchall()
-                return [dict(r) for r in rows]
+                # Over-fetch, then rank in Python by distinct-term hits and trim.
+                fetch_limit = max(top_k * 10, 50)
+                rows = [dict(r) for r in conn.execute(sql + " LIMIT ?", params + [fetch_limit]).fetchall()]
+
+        if terms and len(terms) > 1:
+            def _term_hits(row: dict[str, Any]) -> int:
+                text = (row.get("chunk_text") or "").lower()
+                return sum(1 for t in terms if t in text)
+            rows.sort(key=_term_hits, reverse=True)
+        return rows[:top_k]
 
     def embedding_candidates(self, *, owner_id: int, channel_url: str | None, tag: str | None = None) -> list[dict[str, Any]]:
         with self.lock:
