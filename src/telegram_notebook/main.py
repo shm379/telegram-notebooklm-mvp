@@ -8,7 +8,9 @@ import shutil
 import tempfile
 import threading
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -33,6 +35,9 @@ from .telegram_backup import (
 )
 from .timeline import build_timeline
 from .transcription import TranscriptionService
+from .webauth import hash_password, new_session_token, verify_password, web_owner_id
+
+SESSION_COOKIE = "tgnb_session"
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +266,33 @@ INDEX_HTML = """
       </section>
 
       <section class="grid">
+        <div class="card settings-card">
+          <h2>Account</h2>
+          <p class="tiny">
+            با ساخت حساب، آرشیو خصوصی خودت را می‌گیری. بدون ورود، روی workspace
+            مشترک (محافظت‌شده با توکن) کار می‌کنی.
+          </p>
+          <div id="authedBox" style="display:none;">
+            <div class="tiny">وارد شده به‌عنوان <b id="authUsername"></b></div>
+            <button id="logoutBtn" class="secondary" type="button" style="margin-top:10px; max-width:160px;">Logout</button>
+          </div>
+          <div id="anonBox" class="settings-grid" style="align-items:end;">
+            <div>
+              <label for="authUser">Username</label>
+              <input id="authUser" autocomplete="username" />
+            </div>
+            <div>
+              <label for="authPass">Password</label>
+              <input id="authPass" type="password" autocomplete="current-password" />
+            </div>
+            <div style="display:flex; gap:10px;">
+              <button id="loginBtn" type="button">Login</button>
+              <button id="registerBtn" class="secondary" type="button">Register</button>
+            </div>
+          </div>
+          <div class="status" id="authStatus"></div>
+        </div>
+
         <div class="card settings-card">
           <h2>Settings</h2>
           <div class="settings-grid">
@@ -677,6 +709,56 @@ INDEX_HTML = """
         }
       });
 
+      const authUser = document.getElementById("authUser");
+      const authPass = document.getElementById("authPass");
+      const loginBtn = document.getElementById("loginBtn");
+      const registerBtn = document.getElementById("registerBtn");
+      const logoutBtn = document.getElementById("logoutBtn");
+      const authStatus = document.getElementById("authStatus");
+      const authedBox = document.getElementById("authedBox");
+      const anonBox = document.getElementById("anonBox");
+      const authUsernameEl = document.getElementById("authUsername");
+
+      async function refreshAuth() {
+        try {
+          const data = await fetchJson("/api/auth/me");
+          if (data.user) {
+            authedBox.style.display = "block";
+            anonBox.style.display = "none";
+            authUsernameEl.textContent = data.user.username;
+          } else {
+            authedBox.style.display = "none";
+            anonBox.style.display = "grid";
+          }
+        } catch (error) { /* leave the anon form visible */ }
+      }
+
+      async function doAuth(endpoint) {
+        authStatus.textContent = "...";
+        try {
+          const data = await fetchJson(endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ username: authUser.value.trim(), password: authPass.value }),
+          });
+          authPass.value = "";
+          authStatus.textContent = `وارد شدی به‌عنوان ${data.user.username}`;
+          await refreshAuth();
+        } catch (error) {
+          authStatus.textContent = error.message;
+        }
+      }
+
+      loginBtn.addEventListener("click", () => doAuth("/api/auth/login"));
+      registerBtn.addEventListener("click", () => doAuth("/api/auth/register"));
+      logoutBtn.addEventListener("click", async () => {
+        try { await fetchJson("/api/auth/logout", { method: "POST" }); } catch (error) { /* ignore */ }
+        authStatus.textContent = "خارج شدی.";
+        await refreshAuth();
+      });
+
+      refreshAuth();
+
       loadSettings().catch(error => {
         settingsStatus.textContent = error.message;
       });
@@ -881,11 +963,15 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b"{}"
         return json.loads(body.decode("utf-8"))
 
-    def _send_json(self, payload: dict[str, object], status: int = 200) -> None:
+    def _send_json(
+        self, payload: dict[str, object], status: int = 200, extra_headers: list[tuple[str, str]] | None = None
+    ) -> None:
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
+        for key, value in extra_headers or []:
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(raw)
 
@@ -930,6 +1016,39 @@ class RequestHandler(BaseHTTPRequestHandler):
         )
         return False
 
+    def _cookie_value(self, name: str) -> str | None:
+        raw = self.headers.get("Cookie")
+        if not raw:
+            return None
+        try:
+            jar = SimpleCookie()
+            jar.load(raw)
+        except Exception:
+            return None
+        morsel = jar.get(name)
+        return morsel.value if morsel else None
+
+    def _session_user(self) -> dict[str, object] | None:
+        """The logged-in web user for this request (from the session cookie), or None."""
+        token = self._cookie_value(SESSION_COOKIE)
+        if not token:
+            return None
+        return state.repository.get_web_session_user(token=token)
+
+    def _authorize(self) -> int | None:
+        """Resolve the archive owner for a data request, or send 401 and return None.
+
+        A valid login session selects that user's private archive; otherwise the
+        request falls back to the shared workspace (owner 0), still gated by the
+        WEB_API_TOKEN / loopback rule.
+        """
+        user = self._session_user()
+        if user:
+            return web_owner_id(int(user["id"]))
+        if self._require_auth():
+            return WEB_OWNER_ID
+        return None
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         try:
@@ -968,44 +1087,52 @@ class RequestHandler(BaseHTTPRequestHandler):
                     }
                 )
                 return
+            if parsed.path == "/api/auth/me":
+                user = self._session_user()
+                self._send_json({"user": {"username": user["username"]} if user else None})
+                return
             if parsed.path == "/api/stats":
-                if not self._require_auth():
+                owner = self._authorize()
+                if owner is None:
                     return
-                self._send_json(state.repository.archive_stats(owner_id=WEB_OWNER_ID))
+                self._send_json(state.repository.archive_stats(owner_id=owner))
                 return
             if parsed.path == "/api/recent":
-                if not self._require_auth():
+                owner = self._authorize()
+                if owner is None:
                     return
                 limit = _query_int(parse_qs(parsed.query), "limit", default=10, lo=1, hi=50)
-                items = state.repository.timeline_items(owner_id=WEB_OWNER_ID, limit=limit)
+                items = state.repository.timeline_items(owner_id=owner, limit=limit)
                 self._send_json({"items": recent_rows(items, limit=limit)})
                 return
             if parsed.path == "/api/timeline":
-                if not self._require_auth():
+                owner = self._authorize()
+                if owner is None:
                     return
                 query = parse_qs(parsed.query)
                 granularity = "day" if query.get("granularity", ["month"])[0] == "day" else "month"
-                items = state.repository.timeline_items(owner_id=WEB_OWNER_ID)
+                items = state.repository.timeline_items(owner_id=owner)
                 self._send_json({"granularity": granularity, "periods": build_timeline(items, granularity=granularity)})
                 return
             if parsed.path == "/api/sources":
-                if not self._require_auth():
+                owner = self._authorize()
+                if owner is None:
                     return
-                self._send_json({"sources": state.repository.source_counts(owner_id=WEB_OWNER_ID)})
+                self._send_json({"sources": state.repository.source_counts(owner_id=owner)})
                 return
             self._send_json({"detail": "Not found"}, status=HTTPStatus.NOT_FOUND)
         except Exception as exc:
             logger.exception("GET %s failed", parsed.path)
             self._send_json({"detail": str(exc)}, status=400)
 
-    def _handle_backup_upload(self, parsed, *, ingest: bool) -> None:
+    def _handle_backup_upload(self, parsed, *, ingest: bool, owner_id: int) -> None:
         """Read an uploaded Telegram backup and return its Markdown.
 
         The file arrives as the raw request body with its name in ``X-Filename``
         (or ``?filename=``), so there is no multipart parsing to do. With
-        ``ingest=True`` the backup is also indexed into the shared web archive
-        (``WEB_OWNER_ID``) with media OCR/transcription; with ``ingest=False`` it
-        is only converted to Markdown (no indexing, no LLM calls).
+        ``ingest=True`` the backup is also indexed into ``owner_id``'s archive
+        (with media OCR/transcription); with ``ingest=False`` it is only converted
+        to Markdown (no indexing, no LLM calls).
         """
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length) if length else b""
@@ -1027,7 +1154,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         if ingest:
             payload["media"] = self._enrich_web_backup_media(chats, body, filename)
             try:
-                result = asyncio.run(state.pipeline.ingest_backup(owner_id=WEB_OWNER_ID, chats=chats))
+                result = asyncio.run(state.pipeline.ingest_backup(owner_id=owner_id, chats=chats))
             except Exception as exc:
                 logger.exception("Backup import failed")
                 self._send_json({"detail": str(exc)}, status=400)
@@ -1079,17 +1206,20 @@ class RequestHandler(BaseHTTPRequestHandler):
         finally:
             zf.close()
 
-    def do_POST(self) -> None:
-        parsed = urlparse(self.path)
-        if not self._require_auth():
-            return
+    def _session_cookie_header(self, token: str, *, clear: bool = False) -> tuple[str, str]:
+        secure_bits = "HttpOnly; SameSite=Lax; Path=/"
+        if clear:
+            return ("Set-Cookie", f"{SESSION_COOKIE}=; Max-Age=0; {secure_bits}")
+        return ("Set-Cookie", f"{SESSION_COOKIE}={token}; Max-Age=2592000; {secure_bits}")
 
-        if parsed.path in ("/api/backup/import", "/api/backup/convert"):
-            try:
-                self._handle_backup_upload(parsed, ingest=parsed.path.endswith("/import"))
-            except Exception as exc:
-                logger.exception("Backup upload handler failed")
-                self._send_json({"detail": str(exc)}, status=400)
+    def _handle_auth(self, parsed) -> None:
+        """Register / login / logout for the multi-user web app (cookie sessions)."""
+        path = parsed.path
+        if path == "/api/auth/logout":
+            token = self._cookie_value(SESSION_COOKIE)
+            if token:
+                state.repository.delete_web_session(token=token)
+            self._send_json({"ok": True}, extra_headers=[self._session_cookie_header("", clear=True)])
             return
 
         try:
@@ -1097,8 +1227,67 @@ class RequestHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self._send_json({"detail": "Invalid JSON payload"}, status=400)
             return
+        username = str(payload.get("username", "")).strip()
+        password = str(payload.get("password", ""))
 
+        if path == "/api/auth/register":
+            if len(username) < 3 or len(password) < 6:
+                self._send_json(
+                    {"detail": "Username must be ≥3 chars and password ≥6 chars."}, status=400
+                )
+                return
+            user_id = state.repository.create_web_user(
+                username=username,
+                password_hash=hash_password(password),
+                created_at=datetime.now(UTC).isoformat(),
+            )
+            if user_id is None:
+                self._send_json({"detail": "That username is already taken."}, status=409)
+                return
+            self._start_session(user_id, username)
+            return
+
+        if path == "/api/auth/login":
+            user = state.repository.get_web_user_by_name(username=username)
+            if not user or not verify_password(password, user["password_hash"]):
+                self._send_json({"detail": "Invalid username or password."}, status=401)
+                return
+            self._start_session(int(user["id"]), username)
+            return
+
+        self._send_json({"detail": "Not found"}, status=HTTPStatus.NOT_FOUND)
+
+    def _start_session(self, user_id: int, username: str) -> None:
+        token = new_session_token()
+        state.repository.create_web_session(
+            token=token, web_user_id=user_id, created_at=datetime.now(UTC).isoformat()
+        )
+        self._send_json(
+            {"user": {"username": username}},
+            extra_headers=[self._session_cookie_header(token)],
+        )
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+
+        # Auth endpoints establish identity; they are not behind the API token.
+        if parsed.path.startswith("/api/auth/"):
+            try:
+                self._handle_auth(parsed)
+            except Exception as exc:
+                logger.exception("Auth handler failed")
+                self._send_json({"detail": str(exc)}, status=400)
+            return
+
+        # Server-wide settings are admin-only (token / loopback), never per web user.
         if parsed.path == "/api/settings":
+            if not self._require_auth():
+                return
+            try:
+                payload = self._read_json()
+            except json.JSONDecodeError:
+                self._send_json({"detail": "Invalid JSON payload"}, status=400)
+                return
             updates: dict[str, str | None] = {}
             for key in (
                 "transcription_provider",
@@ -1117,6 +1306,25 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_json(asdict(state.runtime_config()))
             return
 
+        # Everything below operates on an archive: resolve its owner (session or shared).
+        owner = self._authorize()
+        if owner is None:
+            return
+
+        if parsed.path in ("/api/backup/import", "/api/backup/convert"):
+            try:
+                self._handle_backup_upload(parsed, ingest=parsed.path.endswith("/import"), owner_id=owner)
+            except Exception as exc:
+                logger.exception("Backup upload handler failed")
+                self._send_json({"detail": str(exc)}, status=400)
+            return
+
+        try:
+            payload = self._read_json()
+        except json.JSONDecodeError:
+            self._send_json({"detail": "Invalid JSON payload"}, status=400)
+            return
+
         if parsed.path == "/api/channels/ingest":
             channel_url = str(payload.get("channel_url", "")).strip()
             limit = int(payload.get("limit", 50))
@@ -1125,7 +1333,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             try:
                 stats = asyncio.run(
-                    state.pipeline.ingest_channel(owner_id=WEB_OWNER_ID, channel_url=channel_url, limit=limit)
+                    state.pipeline.ingest_channel(owner_id=owner, channel_url=channel_url, limit=limit)
                 )
                 self._send_json(
                     {
@@ -1150,7 +1358,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             try:
                 results = state.search_service.search(
-                    owner_id=WEB_OWNER_ID,
+                    owner_id=owner,
                     query=query,
                     channel_url=str(channel_url).strip() if channel_url else None,
                     top_k=top_k,
@@ -1177,7 +1385,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 vertex_config = state.vertex_search_config()
                 # 1. Search for relevant chunks
                 results = state.search_service.search(
-                    owner_id=WEB_OWNER_ID,
+                    owner_id=owner,
                     query=query,
                     channel_url=str(channel_url).strip() if channel_url else None,
                     top_k=5,

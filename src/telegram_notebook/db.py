@@ -219,6 +219,21 @@ class Repository:
                         PRIMARY KEY (collection_id, tag)
                     )
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS web_users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT UNIQUE,
+                        password_hash TEXT,
+                        created_at TEXT
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS web_sessions (
+                        token TEXT PRIMARY KEY,
+                        web_user_id INTEGER,
+                        created_at TEXT
+                    )
+                """)
                 self._ensure_channel_owner(conn)
                 self._ensure_bot_user_columns(conn)
                 self._ensure_rule_columns(conn)
@@ -1051,3 +1066,58 @@ self, *, bot_user_id: int, chat_id: int, username: str | None, first_name: str |
                 )
                 conn.commit()
                 return cur.rowcount
+
+    # --- Web users & sessions (multi-user web app) -------------------------
+
+    def create_web_user(self, *, username: str, password_hash: str, created_at: str | None = None) -> int | None:
+        """Create a web user. Returns its id, or None if the username is taken."""
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                try:
+                    cur = conn.execute(
+                        "INSERT INTO web_users (username, password_hash, created_at) VALUES (?, ?, ?)",
+                        (username, password_hash, created_at),
+                    )
+                except sqlite3.IntegrityError:
+                    return None
+                conn.commit()
+                return cur.lastrowid
+
+    def get_web_user_by_name(self, *, username: str) -> dict[str, Any] | None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                res = conn.execute("SELECT * FROM web_users WHERE username = ?", (username,)).fetchone()
+                return dict(res) if res else None
+
+    def create_web_session(self, *, token: str, web_user_id: int, created_at: str | None = None) -> None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO web_sessions (token, web_user_id, created_at) VALUES (?, ?, ?)",
+                    (token, web_user_id, created_at),
+                )
+                conn.commit()
+
+    def get_web_session_user(self, *, token: str) -> dict[str, Any] | None:
+        """Resolve a session token to its web user (id + username), or None."""
+        if not token:
+            return None
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.row_factory = sqlite3.Row
+                res = conn.execute(
+                    """
+                    SELECT u.id AS id, u.username AS username
+                    FROM web_sessions s JOIN web_users u ON u.id = s.web_user_id
+                    WHERE s.token = ?
+                    """,
+                    (token,),
+                ).fetchone()
+                return dict(res) if res else None
+
+    def delete_web_session(self, *, token: str) -> None:
+        with self.lock:
+            with sqlite3.connect(self.path) as conn:
+                conn.execute("DELETE FROM web_sessions WHERE token = ?", (token,))
+                conn.commit()
