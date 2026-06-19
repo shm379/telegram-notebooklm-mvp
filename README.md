@@ -64,7 +64,6 @@ The answer should come with the source, the message link, and the related texts.
 - **Forwarded Inbox**: فوروارد هر پیام به ربات، متن/کپشن آن را در inbox شخصی و قابل‌جستجوی کاربر ذخیره می‌کند
 - **پردازش مدیای فورواردشده**: فایل صوتی/ویدیو/voice به‌صورت خودکار transcribe و عکس/PDF با OCR (Gemini) به متن قابل‌جستجو تبدیل می‌شوند. فایل‌های DOCX/XLSX هم به‌صورت محلی (بدون کلید API و بدون شبکه) استخراج می‌شوند
 - **پردازش مدیا در import کامل کانال**: همان مسیر روی import کانال هم اجرا می‌شود — صوت/ویدیو transcribe، عکس/PDF با OCR، و DOCX/XLSX به‌صورت محلی استخراج می‌شوند (نه فقط متن/کپشن)
-- **پردازش مدیای فورواردشده**: فایل صوتی/ویدیو/voice به‌صورت خودکار transcribe و عکس/PDF با OCR (Gemini) به متن قابل‌جستجو تبدیل می‌شوند
 - **Rule Engine + Tags**: تعریف قانون keyword→tag، تگ‌گذاری خودکار محتوای واردشده، و فیلتر `/search` و `/ask` با `--tag`
 - **Auto-forward به کانال آرشیو**: با `/setarchive`، هر پیامی که فوروارد می‌کنید یا از import کانال می‌آید و با یک قانون tag مطابقت دارد، به‌صورت خودکار به کانال آرشیو شما هم فوروارد می‌شود
 - **Import Jobs**: import کامل کانال در background با صف، progress tracking، resume بعد از قطع‌شدن، و امکان لغو
@@ -379,7 +378,7 @@ Then:
 - **From the bot:** send the `result.json` or `.zip` file directly to the bot. The bot imports it, makes the content searchable, and returns a Markdown copy. (A 20 MB cap because of the Bot API download limit; for a larger file, use the web.)
 - **From the web:** in `/app`, in the "Import Telegram Backup" card, upload the file. The content becomes searchable in the web archive and a Markdown download button appears.
 
-Each chat becomes a synthetic source `backup://<id>` and the import is idempotent (re-importing the same file adds nothing).
+Each chat becomes a synthetic source `backup://<id>` and the import is idempotent (re-importing the same file adds nothing). When you import a **`.zip`** that bundles the exported media, attached **DOCX/XLSX** documents are extracted to text locally (no API key) and folded into the searchable content and the Markdown copy.
 
 ### API
 

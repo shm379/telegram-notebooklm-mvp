@@ -33,7 +33,13 @@ from .recent import recent_rows
 from .rules import classify_ai_tags, match_tags
 from .search import SearchService
 from .stats import format_stats
-from .telegram_backup import count_messages, parse_export, read_export, render_markdown
+from .telegram_backup import (
+    count_messages,
+    make_zip_file_resolver,
+    parse_export,
+    read_export,
+    render_markdown,
+)
 from .telegram_client import (
     build_client_from_session_string,
     request_login_code,
@@ -1909,7 +1915,8 @@ class NotebookBot:
                 self.services.api.send_message(chat_id, "I couldn't download the file from Telegram.")
                 return
             local = self.services.api.download_file(str(file_path), tmpdir / file_name)
-            chats = parse_export(read_export(local.read_bytes(), file_name))
+            data = local.read_bytes()
+            chats = parse_export(read_export(data, file_name), file_resolver=make_zip_file_resolver(data))
         except Exception as exc:
             logger.exception("Backup parse failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, f"I couldn't read that backup: {exc}")
