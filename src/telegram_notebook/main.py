@@ -160,136 +160,290 @@ def _run_account_op(coro_factory):
 
 INDEX_HTML = """
 <!doctype html>
-<html lang="fa">
+<html lang="fa" dir="rtl">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Telegram Notebook</title>
+    <title>Telegram Notebook — پنل کنترل سینمایی</title>
+    <meta name="theme-color" content="#06070b" />
+    <meta name="description" content="پنل هوشمند تبدیل آرشیو تلگرام به یک حافظه‌ی قابل‌جستجو با جست‌وجوی معنایی و پرسش‌وپاسخ RAG." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Inter:wght@400;500;600&family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
     <style>
       :root {
-        --bg: #f6f0e7;
-        --card: rgba(255, 252, 247, 0.88);
-        --ink: #1d1b19;
-        --muted: #6c6257;
-        --accent: #0d7c66;
-        --accent-2: #b45f06;
-        --line: rgba(29, 27, 25, 0.12);
+        --bg-0: #06070b;
+        --bg-1: #0a0d14;
+        --ink: #f3efe6;
+        --muted: #98a1b2;
+        --gold: #e9cd97;
+        --gold-soft: #f3ddae;
+        --emerald: #34d8a8;
+        --teal: #14b894;
+        --line: rgba(233, 205, 151, 0.16);
+        --line-soft: rgba(255, 255, 255, 0.07);
+        --card: rgba(15, 20, 30, 0.62);
+        --radius: 22px;
+        --shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
       }
       * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
       body {
         margin: 0;
-        font-family: "Iowan Old Style", "Palatino Linotype", serif;
+        min-height: 100vh;
+        font-family: "Vazirmatn", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
         color: var(--ink);
+        background: var(--bg-0);
+        overflow-x: hidden;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+      ::selection { background: rgba(233, 205, 151, 0.28); color: #fff; }
+
+      /* ---------- cinematic background ---------- */
+      .bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; }
+      .bg-aurora {
+        position: absolute; inset: -25%;
         background:
-          radial-gradient(circle at top left, rgba(13,124,102,0.14), transparent 28%),
-          radial-gradient(circle at bottom right, rgba(180,95,6,0.14), transparent 30%),
-          var(--bg);
+          radial-gradient(40% 40% at 18% 12%, rgba(20, 184, 148, 0.22), transparent 60%),
+          radial-gradient(38% 38% at 82% 16%, rgba(233, 205, 151, 0.20), transparent 60%),
+          radial-gradient(55% 55% at 50% 108%, rgba(36, 80, 120, 0.30), transparent 65%),
+          linear-gradient(180deg, #06070b 0%, #080b12 45%, #06070b 100%);
+        filter: saturate(1.15);
+        animation: drift 28s ease-in-out infinite alternate;
       }
-      .wrap {
-        max-width: 1180px;
-        margin: 0 auto;
-        padding: 28px 16px 64px;
+      @keyframes drift {
+        0% { transform: translate3d(0, 0, 0) scale(1); }
+        100% { transform: translate3d(0, -3%, 0) scale(1.07); }
       }
-      .hero {
-        padding: 28px;
-        border-bottom: 1px solid var(--line);
+      .bg-grid {
+        position: absolute; inset: 0; opacity: 0.5;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+        background-size: 64px 64px;
+        -webkit-mask-image: radial-gradient(circle at 50% 28%, #000 0%, transparent 72%);
+        mask-image: radial-gradient(circle at 50% 28%, #000 0%, transparent 72%);
       }
-      h1 {
-        margin: 0;
-        font-size: clamp(2rem, 5vw, 4.6rem);
-        line-height: 0.95;
-        letter-spacing: -0.04em;
+      #fx { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0.6; }
+      .bg-grain {
+        position: absolute; inset: 0; pointer-events: none; opacity: 0.05; mix-blend-mode: overlay;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
       }
-      p {
-        color: var(--muted);
-        font-size: 1.05rem;
-        line-height: 1.7;
+      .bg-vignette {
+        position: absolute; inset: 0; pointer-events: none;
+        background: radial-gradient(120% 90% at 50% 0%, transparent 55%, rgba(0, 0, 0, 0.6) 100%);
       }
+
+      /* ---------- layout ---------- */
+      .wrap { max-width: 1200px; margin: 0 auto; padding: 26px 20px 96px; }
+
+      /* ---------- topbar ---------- */
+      .topbar {
+        position: sticky; top: 0; z-index: 30;
+        backdrop-filter: blur(16px);
+        background: linear-gradient(180deg, rgba(6, 7, 11, 0.86), rgba(6, 7, 11, 0.3));
+        border-bottom: 1px solid var(--line-soft);
+      }
+      .topbar-inner {
+        max-width: 1200px; margin: 0 auto; padding: 14px 20px;
+        display: flex; align-items: center; justify-content: space-between; gap: 14px;
+      }
+      .brand { display: flex; align-items: center; gap: 11px; font-weight: 600; }
+      .brand-mark {
+        display: grid; place-items: center; width: 36px; height: 36px; border-radius: 12px;
+        font-size: 1.1rem; color: var(--gold);
+        background: linear-gradient(135deg, rgba(52, 216, 168, 0.25), rgba(233, 205, 151, 0.25));
+        border: 1px solid var(--line); box-shadow: 0 0 28px rgba(52, 216, 168, 0.25);
+      }
+      .brand-name { font-size: 1.06rem; letter-spacing: 0.2px; }
+      .brand-name em { font-style: normal; color: var(--gold); }
+      .topnav { display: flex; align-items: center; gap: 22px; }
+      .topnav a { color: var(--muted); text-decoration: none; font-size: 0.92rem; transition: color 0.2s; }
+      .topnav a:hover { color: var(--ink); }
+      .topnav .pill {
+        padding: 8px 16px; border-radius: 999px; color: var(--ink);
+        border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03);
+      }
+      .topnav .pill:hover { border-color: var(--gold); color: var(--gold); }
+
+      /* ---------- hero ---------- */
+      .hero { padding: 66px 6px 30px; text-align: center; }
+      .eyebrow {
+        display: inline-block; padding: 7px 17px; border-radius: 999px; margin-bottom: 22px;
+        font-size: 0.8rem; letter-spacing: 0.6px; color: var(--gold-soft);
+        border: 1px solid var(--line); background: rgba(233, 205, 151, 0.06);
+      }
+      .hero h1 {
+        margin: 0; font-weight: 600;
+        font-size: clamp(2.1rem, 5.2vw, 4.1rem); line-height: 1.16; letter-spacing: -0.01em;
+      }
+      .hero .grad {
+        background: linear-gradient(100deg, var(--emerald), var(--gold) 58%, var(--gold-soft));
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+      .hero p {
+        max-width: 60ch; margin: 22px auto 0; color: var(--muted);
+        font-size: 1.05rem; line-height: 2;
+      }
+      .hero-stats { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 32px; }
+      .chip {
+        display: flex; align-items: baseline; gap: 9px; padding: 12px 18px; border-radius: 15px;
+        border: 1px solid var(--line-soft); background: var(--card); backdrop-filter: blur(8px);
+      }
+      .chip b { font-size: 1.12rem; color: var(--gold); font-weight: 600; }
+      .chip span { font-size: 0.82rem; color: var(--muted); }
+
+      /* ---------- grid + cards ---------- */
       .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-        gap: 16px;
-        margin-top: 20px;
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+        gap: 18px; margin-top: 48px;
       }
       .card {
-        backdrop-filter: blur(16px);
-        background: var(--card);
+        position: relative; overflow: hidden;
+        background: var(--card); border: 1px solid var(--line-soft);
+        border-radius: var(--radius); padding: 24px;
+        box-shadow: var(--shadow); backdrop-filter: blur(18px);
+        transition: transform 0.4s cubic-bezier(.2, .7, .2, 1), border-color 0.4s, box-shadow 0.4s;
+      }
+      .card::before {
+        content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+        background: linear-gradient(140deg, rgba(233, 205, 151, 0.45), transparent 42%, rgba(52, 216, 168, 0.3));
+        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor; mask-composite: exclude;
+        opacity: 0; transition: opacity 0.4s; pointer-events: none;
+      }
+      .card:hover { transform: translateY(-4px); border-color: transparent; box-shadow: 0 42px 90px rgba(0, 0, 0, 0.62); }
+      .card:hover::before { opacity: 1; }
+      .card.span { grid-column: 1 / -1; }
+      .card-head { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; scroll-margin-top: 90px; }
+      .card-icon {
+        flex: 0 0 auto; width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center;
+        font-size: 1.3rem; color: var(--gold);
+        background: linear-gradient(135deg, rgba(52, 216, 168, 0.16), rgba(233, 205, 151, 0.14));
         border: 1px solid var(--line);
-        border-radius: 24px;
-        padding: 18px;
-        box-shadow: 0 18px 50px rgba(29, 27, 25, 0.08);
       }
-      .settings-card {
-        grid-column: 1 / -1;
+      .card-head h2 { margin: 0; font-size: 1.16rem; font-weight: 600; letter-spacing: 0.2px; }
+      .card-head .sub { margin: 3px 0 0; font-size: 0.8rem; color: var(--muted); }
+
+      /* ---------- forms ---------- */
+      .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+      label { display: block; margin: 14px 0 7px; font-size: 0.82rem; color: var(--muted); }
+      .card-head + label { margin-top: 2px; }
+      .settings-grid label { margin-top: 0; }
+      input, textarea, select {
+        width: 100%; border-radius: 14px; padding: 12px 14px; font: inherit;
+        color: var(--ink); background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line-soft);
+        transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
       }
-      .settings-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 12px;
+      input::placeholder, textarea::placeholder { color: rgba(152, 161, 178, 0.6); }
+      input:focus, textarea:focus, select:focus {
+        outline: none; border-color: var(--gold);
+        box-shadow: 0 0 0 3px rgba(233, 205, 151, 0.13); background: rgba(255, 255, 255, 0.06);
       }
-      label {
-        display: block;
-        margin-bottom: 8px;
-        font-size: 0.9rem;
-        color: var(--muted);
+      select option { background: #0b0f16; color: var(--ink); }
+      textarea { min-height: 120px; resize: vertical; line-height: 1.8; }
+      input[type="file"] { padding: 10px; color: var(--muted); }
+      input[type="file"]::file-selector-button {
+        margin-inline-end: 12px; padding: 9px 14px; border-radius: 10px; border: 1px solid var(--line);
+        background: rgba(233, 205, 151, 0.08); color: var(--gold); font: inherit; cursor: pointer;
       }
-      input, textarea, button, select {
-        width: 100%;
-        border-radius: 16px;
-        border: 1px solid var(--line);
-        padding: 12px 14px;
-        font: inherit;
-        background: white;
-      }
-      textarea { min-height: 110px; resize: vertical; }
+      .btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+      .btn-row button { width: auto; }
       button {
-        background: linear-gradient(120deg, var(--accent), #0c5d4f);
-        color: white;
-        border: none;
-        cursor: pointer;
+        width: 100%; border: none; cursor: pointer; font: inherit; font-weight: 600;
+        padding: 12px 22px; border-radius: 14px; color: #06120e; letter-spacing: 0.2px;
+        background: linear-gradient(120deg, var(--emerald), var(--teal));
+        box-shadow: 0 10px 30px rgba(20, 184, 148, 0.28);
+        transition: transform 0.2s, box-shadow 0.2s, filter 0.2s;
       }
+      button:hover { transform: translateY(-2px); box-shadow: 0 16px 40px rgba(20, 184, 148, 0.42); filter: brightness(1.06); }
+      button:active { transform: translateY(0); }
       button.secondary {
-        background: linear-gradient(120deg, var(--accent-2), #8a4805);
+        color: #1a1206; background: linear-gradient(120deg, var(--gold-soft), var(--gold));
+        box-shadow: 0 10px 30px rgba(233, 205, 151, 0.25);
       }
-      .results {
-        margin-top: 20px;
-        display: grid;
-        gap: 12px;
-      }
+      button.secondary:hover { box-shadow: 0 16px 40px rgba(233, 205, 151, 0.42); }
+
+      /* ---------- results / status ---------- */
+      .results { margin-top: 18px; display: grid; gap: 12px; }
       .result {
-        padding: 14px;
-        border-radius: 18px;
-        background: rgba(255,255,255,0.72);
-        border: 1px solid var(--line);
+        padding: 16px; border-radius: 16px; line-height: 1.9;
+        background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line-soft);
       }
-      .meta {
-        font-size: 0.85rem;
-        color: var(--muted);
-        margin-bottom: 8px;
+      .meta { font-size: 0.82rem; color: var(--muted); margin-bottom: 8px; }
+      .meta strong { color: var(--gold); }
+      .status { min-height: 24px; margin-top: 12px; font-size: 0.9rem; color: var(--emerald); }
+      .tiny { font-size: 0.84rem; color: var(--muted); line-height: 1.9; }
+      a { color: var(--gold); }
+      code { background: rgba(255, 255, 255, 0.06); padding: 1px 6px; border-radius: 6px; font-size: 0.85em; }
+      #brainAnswer h3 { margin: 0 0 10px; font-size: 1.1rem; }
+      #answerText { white-space: pre-wrap; color: var(--ink); line-height: 2; }
+
+      /* ---------- reveal animation ---------- */
+      .reveal { opacity: 0; transform: translateY(22px); transition: opacity 0.7s ease, transform 0.7s cubic-bezier(.2, .7, .2, 1); }
+      .reveal.in { opacity: 1; transform: none; }
+
+      ::-webkit-scrollbar { width: 11px; }
+      ::-webkit-scrollbar-track { background: #06070b; }
+      ::-webkit-scrollbar-thumb { background: linear-gradient(var(--teal), var(--gold)); border-radius: 99px; border: 3px solid #06070b; }
+
+      @media (max-width: 640px) {
+        .topnav { gap: 13px; }
+        .topnav a:not(.pill) { display: none; }
+        .hero { padding-top: 42px; }
       }
-      .status {
-        min-height: 28px;
-        color: var(--accent);
-      }
-      .tiny {
-        font-size: 0.85rem;
-        color: var(--muted);
-      }
-      a { color: var(--accent); }
     </style>
   </head>
   <body>
-    <div class="wrap">
-      <section class="hero">
-        <h1>Telegram Notebook</h1>
+    <div class="bg" aria-hidden="true">
+      <div class="bg-aurora"></div>
+      <div class="bg-grid"></div>
+      <canvas id="fx"></canvas>
+      <div class="bg-grain"></div>
+      <div class="bg-vignette"></div>
+    </div>
+
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="brand-mark">◎</span>
+          <span class="brand-name">Telegram <em>Notebook</em></span>
+        </div>
+        <nav class="topnav">
+          <a href="/">خانه</a>
+          <a href="#settings">تنظیمات</a>
+          <a href="#library">کتابخانه</a>
+          <a class="pill" href="https://github.com/shm379/telegram-notebooklm-mvp" target="_blank" rel="noreferrer">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="hero reveal">
+        <span class="eyebrow">پنل کنترل · نوت‌بوک هوشمند تلگرام</span>
+        <h1>آرشیو تلگرام شما،<br /><span class="grad">یک حافظه‌ی سینمایی و قابل‌جستجو.</span></h1>
         <p>
-          لینک کانال عمومی را ingest کن، ویدیو و صوت را به متن تبدیل کن، و بعد مثل یک دفتر جست‌وجوی معنایی روی archive خودت داشته باش. حالا می‌توانی بین OpenAI و Gemini جابه‌جا شوی و مدل دلخواه را از خود API بگیری.
+          کانال‌ها، چت‌ها و فایل‌های بکاپ را وارد کن؛ ویدیو و صوت به متن تبدیل می‌شوند و
+          مثل یک NotebookLM شخصی روی آرشیوت جست‌وجوی معنایی و پرسش‌وپاسخ مستند داری —
+          با امکان جابه‌جایی آزاد بین OpenAI و Gemini.
         </p>
+        <div class="hero-stats">
+          <div class="chip"><b>۲</b><span>موتور OpenAI / Gemini</span></div>
+          <div class="chip"><b>RAG</b><span>پاسخ مستند و ارجاع‌دار</span></div>
+          <div class="chip"><b>∞</b><span>آرشیو قابل‌جستجو</span></div>
+        </div>
       </section>
 
       <section class="grid">
-        <div class="card settings-card">
-          <h2>Settings</h2>
+        <div class="card span reveal">
+          <div class="card-head" id="settings">
+            <div class="card-icon">⚙️</div>
+            <div>
+              <h2>تنظیمات موتور</h2>
+              <p class="sub">Provider، مدل و کلیدهای API</p>
+            </div>
+          </div>
           <div class="settings-grid">
             <div>
               <label for="transcriptionProvider">Transcription Provider</label>
@@ -322,49 +476,73 @@ INDEX_HTML = """
               <input id="openaiApiKey" type="password" placeholder="اختیاری؛ فقط برای بروزرسانی" />
             </div>
           </div>
-          <div style="margin-top:12px; display:flex; gap:12px; flex-wrap:wrap;">
-            <button id="reloadModelsBtn" type="button">Reload Models</button>
-            <button id="saveSettingsBtn" class="secondary" type="button">Save Settings</button>
+          <div class="btn-row">
+            <button id="reloadModelsBtn" type="button">بارگذاری مدل‌ها</button>
+            <button id="saveSettingsBtn" class="secondary" type="button">ذخیره تنظیمات</button>
           </div>
           <div class="tiny" id="settingsSummary"></div>
           <div class="status" id="settingsStatus"></div>
         </div>
 
-        <div class="card">
-          <h2>Ingest Channel</h2>
+        <div class="card reveal">
+          <div class="card-head">
+            <div class="card-icon">📡</div>
+            <div>
+              <h2>دریافت کانال</h2>
+              <p class="sub">ingest پیام‌ها از یک کانال عمومی</p>
+            </div>
+          </div>
           <label for="channelUrl">Channel URL</label>
           <input id="channelUrl" value="https://t.me/example_channel" />
           <label for="limit">Recent posts limit</label>
           <input id="limit" type="number" value="50" min="1" max="500" />
-          <button id="ingestBtn">Start Ingest</button>
+          <button id="ingestBtn">شروع دریافت</button>
           <div class="status" id="ingestStatus"></div>
         </div>
 
-        <div class="card">
-          <h2>Search & Ask</h2>
+        <div class="card reveal">
+          <div class="card-head">
+            <div class="card-icon">🔎</div>
+            <div>
+              <h2>جست‌وجو و پرسش</h2>
+              <p class="sub">جست‌وجوی معنایی + پاسخ RAG مستند</p>
+            </div>
+          </div>
           <label for="query">Query / Question</label>
           <textarea id="query">هوش مصنوعی و مدل‌های زبانی</textarea>
           <label for="searchChannel">Optional channel filter</label>
           <input id="searchChannel" placeholder="https://t.me/example_channel" />
-          <div style="display:flex; gap:10px;">
-            <button class="secondary" id="searchBtn">Search Transcript</button>
-            <button id="askBtn">Ask AI Brain</button>
+          <div class="btn-row">
+            <button class="secondary" id="searchBtn">جست‌وجوی متن</button>
+            <button id="askBtn">پرسش از مغز AI</button>
           </div>
           <div class="status" id="searchStatus"></div>
         </div>
 
-        <div class="card">
-          <h2>Library</h2>
+        <div class="card reveal">
+          <div class="card-head" id="library">
+            <div class="card-icon">🗂️</div>
+            <div>
+              <h2>کتابخانه</h2>
+              <p class="sub">نمای کلی، timeline ماهانه و آخرین موارد</p>
+            </div>
+          </div>
           <p class="tiny">An overview of your archive, a monthly timeline, and its most recent items.</p>
-          <button id="loadLibraryBtn" type="button">Load library</button>
+          <button id="loadLibraryBtn" type="button">بارگذاری کتابخانه</button>
           <div class="status" id="libraryStatus"></div>
           <div class="tiny" id="libraryStats" style="margin-top:10px;"></div>
           <div class="tiny" id="libraryTimeline" style="margin-top:10px;"></div>
           <div class="results" id="libraryRecent"></div>
         </div>
 
-        <div class="card">
-          <h2>Import Telegram Backup</h2>
+        <div class="card reveal">
+          <div class="card-head">
+            <div class="card-icon">⬆️</div>
+            <div>
+              <h2>ورود بکاپ تلگرام</h2>
+              <p class="sub">فایل JSON/ZIP خروجی Telegram Desktop</p>
+            </div>
+          </div>
           <p class="tiny">
             در Telegram Desktop مسیر «Export chat history» را با فرمت
             <b>Machine-readable JSON</b> بزن، سپس فایل <code>result.json</code> یا
@@ -372,42 +550,97 @@ INDEX_HTML = """
           </p>
           <label for="backupFile">Backup file (.json / .zip)</label>
           <input id="backupFile" type="file" accept=".json,.zip,application/json,application/zip" />
-          <button id="importBackupBtn" type="button">Import & Convert</button>
+          <button id="importBackupBtn" type="button">ورود و تبدیل</button>
           <div class="status" id="backupStatus"></div>
           <div class="tiny" id="backupDownload" style="margin-top:10px;"></div>
         </div>
 
-        <div class="card">
-          <h2>Telegram Toolset</h2>
+        <div class="card reveal">
+          <div class="card-head">
+            <div class="card-icon">🛠️</div>
+            <div>
+              <h2>جعبه‌ابزار تلگرام</h2>
+              <p class="sub">روی حساب متصل سرور عمل می‌کند</p>
+            </div>
+          </div>
           <p class="tiny">Acts on the server's connected account (TELEGRAM_SESSION_STRING).</p>
-          <div style="display:flex; gap:10px; flex-wrap:wrap;">
-            <button id="accountBtn" type="button">Account</button>
-            <button id="deletedBtn" class="secondary" type="button">Recovered deleted</button>
+          <div class="btn-row">
+            <button id="accountBtn" type="button">حساب</button>
+            <button id="deletedBtn" class="secondary" type="button">پیام‌های حذف‌شده</button>
           </div>
           <label for="toolsetPeer" style="margin-top:10px;">Chat (for scheduled / export)</label>
           <input id="toolsetPeer" placeholder="@channel or https://t.me/..." />
-          <div style="display:flex; gap:10px; flex-wrap:wrap;">
-            <button id="scheduledBtn" type="button">Scheduled</button>
-            <button id="llmExportBtn" class="secondary" type="button">LLM export</button>
+          <div class="btn-row">
+            <button id="scheduledBtn" type="button">زمان‌بندی‌شده</button>
+            <button id="llmExportBtn" class="secondary" type="button">خروجی LLM</button>
           </div>
           <label for="resendTarget" style="margin-top:10px;">Resend target</label>
           <input id="resendTarget" placeholder="@user or chat id" />
           <label for="resendText">Resend text</label>
           <textarea id="resendText" placeholder="Message to send on your behalf"></textarea>
-          <button id="resendBtn" type="button">Send</button>
+          <button id="resendBtn" type="button">ارسال</button>
           <div class="status" id="toolsetStatus"></div>
           <div class="results" id="toolsetResults"></div>
         </div>
       </section>
 
       <div id="brainAnswer" style="display:none; margin-top:20px;" class="card">
-        <h3>AI Brain Response</h3>
+        <h3>✦ پاسخ مغز هوش مصنوعی</h3>
         <p id="answerText" style="white-space: pre-wrap; color: var(--ink);"></p>
         <div class="tiny" id="answerMeta"></div>
       </div>
 
       <section class="results" id="results"></section>
-    </div>
+    </main>
+
+    <script>
+      // Cinematic ambience: drifting golden embers + scroll reveal.
+      (function () {
+        var c = document.getElementById("fx");
+        if (!c || !c.getContext) return;
+        var ctx = c.getContext("2d"), W = 0, H = 0, dots = [];
+        var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        function resize() { W = c.width = window.innerWidth; H = c.height = window.innerHeight; }
+        function make() {
+          dots = [];
+          var n = Math.min(70, Math.floor(W / 22));
+          for (var i = 0; i < n; i++) {
+            dots.push({
+              x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.6 + 0.4,
+              s: Math.random() * 0.4 + 0.1, o: Math.random() * 0.5 + 0.2, t: Math.random() * Math.PI * 2
+            });
+          }
+        }
+        function tick() {
+          ctx.clearRect(0, 0, W, H);
+          for (var i = 0; i < dots.length; i++) {
+            var d = dots[i];
+            d.y -= d.s; d.t += 0.01; d.x += Math.sin(d.t) * 0.2;
+            if (d.y < -10) { d.y = H + 10; d.x = Math.random() * W; }
+            var a = d.o * (0.6 + 0.4 * Math.sin(d.t));
+            ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(233,205,151," + a.toFixed(3) + ")"; ctx.fill();
+          }
+          requestAnimationFrame(tick);
+        }
+        window.addEventListener("resize", function () { resize(); make(); });
+        resize(); make();
+        if (!reduce) tick();
+      })();
+      (function () {
+        var els = document.querySelectorAll(".reveal");
+        if (!("IntersectionObserver" in window)) {
+          els.forEach(function (e) { e.classList.add("in"); });
+          return;
+        }
+        var io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (en) {
+            if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); }
+          });
+        }, { threshold: 0.12 });
+        els.forEach(function (e) { io.observe(e); });
+      })();
+    </script>
     <script>
       const ingestBtn = document.getElementById("ingestBtn");
       const searchBtn = document.getElementById("searchBtn");
@@ -796,75 +1029,149 @@ LANDING_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Telegram Notebook — حافظه‌ی هوشمند تلگرام شما</title>
     <meta name="description" content="آرشیو کانال‌ها، چت‌ها و بکاپ‌های تلگرام را به یک حافظه‌ی قابل‌جستجو و قابل‌اتصال به ابزارهای AI تبدیل کن." />
+    <meta name="theme-color" content="#06070b" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Inter:wght@400;500;600&family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
     <style>
       :root {
-        --bg: #f6f0e7;
-        --card: rgba(255, 252, 247, 0.9);
-        --ink: #1d1b19;
-        --muted: #6c6257;
-        --accent: #0d7c66;
-        --accent-2: #b45f06;
-        --line: rgba(29, 27, 25, 0.12);
+        --bg-0: #06070b;
+        --ink: #f3efe6;
+        --muted: #98a1b2;
+        --gold: #e9cd97;
+        --gold-soft: #f3ddae;
+        --emerald: #34d8a8;
+        --teal: #14b894;
+        --line: rgba(233, 205, 151, 0.16);
+        --line-soft: rgba(255, 255, 255, 0.07);
+        --card: rgba(15, 20, 30, 0.62);
       }
       * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
       body {
-        margin: 0;
-        font-family: "Iowan Old Style", "Palatino Linotype", "Vazirmatn", Tahoma, serif;
-        color: var(--ink);
+        margin: 0; min-height: 100vh; color: var(--ink); background: var(--bg-0);
+        overflow-x: hidden; -webkit-font-smoothing: antialiased;
+        font-family: "Vazirmatn", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      ::selection { background: rgba(233, 205, 151, 0.28); color: #fff; }
+      a { color: var(--gold); text-decoration: none; }
+      code { background: rgba(255, 255, 255, 0.06); padding: 1px 6px; border-radius: 6px; font-size: 0.85em; }
+
+      /* ---------- cinematic background ---------- */
+      .bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; }
+      .bg-aurora {
+        position: absolute; inset: -25%;
         background:
-          radial-gradient(circle at top left, rgba(13,124,102,0.16), transparent 30%),
-          radial-gradient(circle at bottom right, rgba(180,95,6,0.16), transparent 32%),
-          var(--bg);
+          radial-gradient(40% 40% at 18% 10%, rgba(20, 184, 148, 0.22), transparent 60%),
+          radial-gradient(40% 40% at 82% 14%, rgba(233, 205, 151, 0.20), transparent 60%),
+          radial-gradient(55% 55% at 50% 108%, rgba(36, 80, 120, 0.30), transparent 65%),
+          linear-gradient(180deg, #06070b 0%, #080b12 45%, #06070b 100%);
+        animation: drift 28s ease-in-out infinite alternate;
       }
-      a { color: var(--accent); text-decoration: none; }
-      .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 72px; }
+      @keyframes drift { 0% { transform: translate3d(0,0,0) scale(1); } 100% { transform: translate3d(0,-3%,0) scale(1.07); } }
+      .bg-grid {
+        position: absolute; inset: 0; opacity: 0.5;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+        background-size: 64px 64px;
+        -webkit-mask-image: radial-gradient(circle at 50% 22%, #000 0%, transparent 72%);
+        mask-image: radial-gradient(circle at 50% 22%, #000 0%, transparent 72%);
+      }
+      .bg-grain {
+        position: absolute; inset: 0; pointer-events: none; opacity: 0.05; mix-blend-mode: overlay;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      }
+      .bg-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(120% 90% at 50% 0%, transparent 55%, rgba(0, 0, 0, 0.6) 100%); }
+
+      .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px 84px; }
       nav {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 8px 0 24px; gap: 12px; flex-wrap: wrap;
+        position: sticky; top: 0; z-index: 20;
+        display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+        padding: 16px 0; margin-bottom: 8px; backdrop-filter: blur(14px);
       }
-      .brand { font-weight: 700; font-size: 1.25rem; letter-spacing: -0.02em; }
-      .nav-links { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+      .brand { font-weight: 700; font-size: 1.2rem; letter-spacing: -0.01em; }
+      .nav-links { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+      .nav-links a { color: var(--muted); transition: color 0.2s; }
+      .nav-links a:hover { color: var(--ink); }
       .btn {
-        display: inline-block; padding: 12px 22px; border-radius: 999px;
-        background: linear-gradient(120deg, var(--accent), #0c5d4f);
-        color: white; border: none; cursor: pointer; font: inherit; font-weight: 600;
+        display: inline-block; padding: 12px 24px; border-radius: 999px; font: inherit; font-weight: 600; cursor: pointer;
+        color: #06120e; border: none; background: linear-gradient(120deg, var(--emerald), var(--teal));
+        box-shadow: 0 12px 34px rgba(20, 184, 148, 0.3); transition: transform 0.2s, box-shadow 0.2s, filter 0.2s;
       }
-      .btn.secondary { background: linear-gradient(120deg, var(--accent-2), #8a4805); }
-      .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
-      .hero { padding: 36px 0 12px; }
-      .hero h1 {
-        margin: 0 0 10px; font-size: clamp(2.2rem, 6vw, 4.4rem);
-        line-height: 1.02; letter-spacing: -0.03em;
+      .btn:hover { transform: translateY(-2px); filter: brightness(1.06); box-shadow: 0 18px 44px rgba(20, 184, 148, 0.42); }
+      .btn.secondary { color: #1a1206; background: linear-gradient(120deg, var(--gold-soft), var(--gold)); box-shadow: 0 12px 34px rgba(233, 205, 151, 0.28); }
+      .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); box-shadow: none; }
+      .btn.ghost:hover { border-color: var(--gold); color: var(--gold); }
+
+      .hero { padding: 62px 0 16px; }
+      .eyebrow {
+        display: inline-block; padding: 7px 17px; border-radius: 999px; margin-bottom: 22px;
+        font-size: 0.8rem; letter-spacing: 0.6px; color: var(--gold-soft);
+        border: 1px solid var(--line); background: rgba(233, 205, 151, 0.06);
       }
-      .hero p { color: var(--muted); font-size: 1.15rem; line-height: 1.9; max-width: 56ch; }
-      .cta { display: flex; gap: 12px; margin-top: 22px; flex-wrap: wrap; }
-      section.block { margin-top: 56px; }
-      h2 { font-size: clamp(1.5rem, 3vw, 2.2rem); letter-spacing: -0.02em; margin: 0 0 18px; }
+      .hero h1 { margin: 0 0 14px; font-weight: 600; font-size: clamp(2.2rem, 6vw, 4.2rem); line-height: 1.16; letter-spacing: -0.01em; max-width: 20ch; }
+      .grad { background: linear-gradient(100deg, var(--emerald), var(--gold) 58%, var(--gold-soft)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+      .hero p { color: var(--muted); font-size: 1.12rem; line-height: 2; max-width: 60ch; }
+      .cta { display: flex; gap: 12px; margin-top: 26px; flex-wrap: wrap; }
+
+      section.block { margin-top: 66px; }
+      h2 { font-size: clamp(1.6rem, 3vw, 2.3rem); letter-spacing: -0.01em; margin: 0 0 22px; font-weight: 600; }
       .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
       .card {
-        backdrop-filter: blur(16px); background: var(--card);
-        border: 1px solid var(--line); border-radius: 22px; padding: 20px;
-        box-shadow: 0 18px 50px rgba(29, 27, 25, 0.08);
+        position: relative; overflow: hidden;
+        backdrop-filter: blur(18px); background: var(--card);
+        border: 1px solid var(--line-soft); border-radius: 20px; padding: 22px;
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5); transition: transform 0.4s cubic-bezier(.2, .7, .2, 1), border-color 0.4s;
       }
-      .card h3 { margin: 0 0 8px; font-size: 1.2rem; }
-      .card p { color: var(--muted); line-height: 1.8; margin: 0; }
-      .steps { counter-reset: step; display: grid; gap: 14px; }
-      .step { display: flex; gap: 14px; align-items: flex-start; }
+      .card::before {
+        content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+        background: linear-gradient(140deg, rgba(233, 205, 151, 0.45), transparent 42%, rgba(52, 216, 168, 0.3));
+        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor; mask-composite: exclude; opacity: 0; transition: opacity 0.4s; pointer-events: none;
+      }
+      .card:hover { transform: translateY(-4px); border-color: transparent; }
+      .card:hover::before { opacity: 1; }
+      .card h3 { margin: 0 0 8px; font-size: 1.18rem; }
+      .card p { color: var(--muted); line-height: 1.9; margin: 0; }
+
+      .steps { display: grid; gap: 14px; }
+      .step {
+        display: flex; gap: 16px; align-items: flex-start; padding: 18px 20px;
+        background: var(--card); border: 1px solid var(--line-soft); border-radius: 18px; backdrop-filter: blur(12px);
+      }
       .step .num {
-        flex: 0 0 auto; width: 38px; height: 38px; border-radius: 50%;
-        display: grid; place-items: center; font-weight: 700; color: white;
-        background: linear-gradient(120deg, var(--accent), #0c5d4f);
+        flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%;
+        display: grid; place-items: center; font-weight: 700; color: #06120e;
+        background: linear-gradient(135deg, var(--emerald), var(--teal));
       }
-      .step .num.two { background: linear-gradient(120deg, var(--accent-2), #8a4805); }
+      .step .num.two { color: #1a1206; background: linear-gradient(135deg, var(--gold-soft), var(--gold)); }
+      .step b { color: var(--ink); }
+
       .panel {
-        background: var(--card); border: 1px solid var(--line); border-radius: 22px;
-        padding: 28px; box-shadow: 0 18px 50px rgba(29, 27, 25, 0.08);
+        position: relative; overflow: hidden;
+        background: var(--card); border: 1px solid var(--line-soft); border-radius: 22px;
+        padding: 30px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5); backdrop-filter: blur(18px);
       }
-      footer { margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); }
+      footer { margin-top: 74px; padding-top: 24px; border-top: 1px solid var(--line-soft); color: var(--muted); }
       .muted { color: var(--muted); }
+
+      .rise { opacity: 0; animation: rise 0.9s cubic-bezier(.2, .7, .2, 1) forwards; }
+      @keyframes rise { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
+
+      ::-webkit-scrollbar { width: 11px; }
+      ::-webkit-scrollbar-track { background: #06070b; }
+      ::-webkit-scrollbar-thumb { background: linear-gradient(var(--teal), var(--gold)); border-radius: 99px; border: 3px solid #06070b; }
     </style>
   </head>
   <body>
+    <div class="bg" aria-hidden="true">
+      <div class="bg-aurora"></div>
+      <div class="bg-grid"></div>
+      <div class="bg-grain"></div>
+      <div class="bg-vignette"></div>
+    </div>
+
     <div class="wrap">
       <nav>
         <div class="brand">📓 Telegram Notebook</div>
@@ -876,8 +1183,9 @@ LANDING_HTML = """
         </div>
       </nav>
 
-      <header class="hero">
-        <h1>تلگرام شما، به یک حافظه‌ی هوشمند تبدیل می‌شود.</h1>
+      <header class="hero rise">
+        <span class="eyebrow">NotebookLM برای تلگرام</span>
+        <h1>تلگرام شما، به یک <span class="grad">حافظه‌ی هوشمند</span> تبدیل می‌شود.</h1>
         <p>
           کانال‌ها، چت‌ها، پیام‌های فورواردشده و حتی <b>فایل بکاپ تلگرام</b> را وارد کن؛
           همه به متن قابل‌جستجو تبدیل می‌شوند و می‌توانی مثل یک NotebookLM شخصی از آرشیو
