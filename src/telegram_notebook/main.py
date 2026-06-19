@@ -4,21 +4,33 @@ import asyncio
 import hmac
 import json
 import logging
+import shutil
+import tempfile
 import threading
 from dataclasses import asdict, dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .config import get_settings, upsert_env_values
 from .db import Repository, connect
 from .embeddings import EmbeddingService
+from .extraction import ExtractionService
 from .logging_config import setup_logging
 from .model_catalog import ModelCatalogService
 from .pipeline import IngestionPipeline
 from .recent import recent_rows
 from .search import SearchService
-from .telegram_backup import count_messages, parse_export, read_export, render_markdown
+from .telegram_backup import (
+    count_messages,
+    enrich_with_media,
+    make_zip_extractor,
+    open_backup_zip,
+    parse_export,
+    read_export,
+    render_markdown,
+)
 from .timeline import build_timeline
 from .transcription import TranscriptionService
 
@@ -605,7 +617,9 @@ INDEX_HTML = """
             body: file,
           });
           backupStatus.textContent =
-            `وارد شد: ${data.messages} پیام از ${data.chats} چت. حالا با Search/Ask قابل جستجوست.`;
+            `وارد شد: ${data.messages} پیام از ${data.chats} چت` +
+            (data.media ? ` (${data.media} مدیا OCR/رونویسی شد)` : "") +
+            `. حالا با Search/Ask قابل جستجوست.`;
           const blob = new Blob([data.markdown || ""], { type: "text/markdown" });
           const url = URL.createObjectURL(blob);
           const link = document.createElement("a");
@@ -953,6 +967,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"detail": f"Could not read backup: {exc}"}, status=400)
             return
+        media = self._enrich_web_backup_media(chats, body, filename)
         try:
             result = asyncio.run(state.pipeline.ingest_backup(owner_id=WEB_OWNER_ID, chats=chats))
         except Exception as exc:
@@ -964,10 +979,54 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "chats": result["chats"],
                 "messages": result["messages"],
+                "media": media,
                 "total_messages": count_messages(chats),
                 "markdown": render_markdown(chats),
             }
         )
+
+    def _enrich_web_backup_media(self, chats, body: bytes, filename: str | None) -> int:
+        """OCR/transcribe media bundled in a backup zip for the web import path.
+
+        Uses the web instance's transcription service plus a Gemini extractor.
+        No-op for raw JSON or when no Gemini key is configured.
+        """
+        zf = open_backup_zip(body, filename)
+        if zf is None:
+            return 0
+        try:
+            tx = state.transcription
+            ex = ExtractionService(
+                provider="gemini",
+                api_key=state.settings.gemini_api_key,
+                model=state.settings.transcription_model,
+            )
+            tx_enabled = bool(tx and tx.enabled)
+            ex_enabled = bool(ex.enabled)
+            if not (tx_enabled or ex_enabled):
+                return 0
+
+            def transcribe(path):
+                return tx.transcribe_media(path, path.parent)
+
+            def ocr(path):
+                return ex.extract(path)
+
+            tmpdir = Path(tempfile.mkdtemp(prefix="webbackup_"))
+            try:
+                extractor = make_zip_extractor(
+                    zf, tmpdir,
+                    transcribe=transcribe if tx_enabled else None,
+                    ocr=ocr if ex_enabled else None,
+                )
+                return enrich_with_media(chats, extract=extractor)
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            logger.exception("Web backup media enrichment failed")
+            return 0
+        finally:
+            zf.close()
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)

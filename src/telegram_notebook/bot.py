@@ -27,7 +27,15 @@ from .recent import recent_rows
 from .rules import classify_ai_tags, match_tags
 from .search import SearchService
 from .stats import format_stats
-from .telegram_backup import count_messages, parse_export, read_export, render_markdown
+from .telegram_backup import (
+    count_messages,
+    enrich_with_media,
+    make_zip_extractor,
+    open_backup_zip,
+    parse_export,
+    read_export,
+    render_markdown,
+)
 from .telegram_client import request_login_code, sign_in_with_code, sign_in_with_password
 from .timeline import build_timeline
 from .transcription import TranscriptionService
@@ -1530,6 +1538,46 @@ class NotebookBot:
             "use the website importer.",
         )
 
+    def _enrich_backup_media(self, user, chats, data, filename, tmpdir, chat_id) -> None:
+        """OCR/transcribe media bundled in a backup zip, appending text to messages.
+
+        Only runs for ``.zip`` uploads and only when the user has a usable
+        transcription/extraction service (Gemini key). No-op for raw JSON or when
+        no key is configured — the media labels are still indexed either way.
+        """
+        zf = open_backup_zip(data, filename)
+        if zf is None:
+            return
+        try:
+            tx = self._transcription_service_for_user(user)
+            ex = self._extraction_service_for_user(user)
+            tx_enabled = bool(tx and tx.enabled)
+            ex_enabled = bool(ex and ex.enabled)
+            if not (tx_enabled or ex_enabled):
+                return
+
+            def transcribe(path):
+                return tx.transcribe_media(path, path.parent)
+
+            def ocr(path):
+                return ex.extract(path)
+
+            media_dir = tmpdir / "media"
+            media_dir.mkdir(exist_ok=True)
+            self.services.api.send_message(chat_id, "Extracting text from photos/voice in the backup…")
+            extractor = make_zip_extractor(
+                zf, media_dir,
+                transcribe=transcribe if tx_enabled else None,
+                ocr=ocr if ex_enabled else None,
+            )
+            count = enrich_with_media(chats, extract=extractor)
+            if count:
+                self.services.api.send_message(chat_id, f"Read {count} media file(s) from the backup.")
+        except Exception:
+            logger.exception("Backup media enrichment failed for chat %s", chat_id)
+        finally:
+            zf.close()
+
     def _handle_backup_document(self, chat_id: int, bot_user_id: int, document: dict) -> None:
         file_id = document.get("file_id")
         file_name = document.get("file_name") or "backup"
@@ -1554,7 +1602,8 @@ class NotebookBot:
                 self.services.api.send_message(chat_id, "I couldn't download the file from Telegram.")
                 return
             local = self.services.api.download_file(str(file_path), tmpdir / file_name)
-            chats = parse_export(read_export(local.read_bytes(), file_name))
+            data = local.read_bytes()
+            chats = parse_export(read_export(data, file_name))
         except Exception as exc:
             logger.exception("Backup parse failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, f"I couldn't read that backup: {exc}")
@@ -1568,6 +1617,7 @@ class NotebookBot:
             return
 
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+        self._enrich_backup_media(user, chats, data, file_name, tmpdir, chat_id)
         self.services.api.send_message(
             chat_id, f"Importing {total} message(s) from {len(chats)} chat(s)… this can take a moment."
         )

@@ -18,6 +18,7 @@ import json
 import zipfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 ZIP_MAGIC = b"PK\x03\x04"
 
@@ -31,6 +32,11 @@ class ParsedMessage:
     media_label: str | None = None
     forwarded_from: str | None = None
     reply_to: int | None = None
+    # Relative path of an attached media file inside the export (zip), plus the
+    # info needed to route it to OCR/transcription when the media is available.
+    media_path: str | None = None
+    media_kind: str | None = None
+    media_mime: str | None = None
 
     @property
     def searchable_text(self) -> str:
@@ -138,7 +144,46 @@ def _parse_message(raw: object) -> ParsedMessage | None:
         media_label=media_label(raw),
         forwarded_from=(raw.get("forwarded_from") or None),
         reply_to=reply_to if isinstance(reply_to, int) else None,
+        media_path=media_path(raw),
+        media_kind=media_kind(raw),
+        media_mime=(raw.get("mime_type") or None),
     )
+
+
+def media_path(raw: dict) -> str | None:
+    """Relative path of an attached media file inside the export, or None."""
+    path = raw.get("photo") or raw.get("file")
+    return str(path) if isinstance(path, str) and path and not path.startswith("(") else None
+
+
+def media_kind(raw: dict) -> str | None:
+    """Coarse kind of a message's attachment ('photo'/media_type/'file')."""
+    if raw.get("photo"):
+        return "photo"
+    if raw.get("media_type"):
+        return str(raw["media_type"])
+    if raw.get("file"):
+        return "file"
+    return None
+
+
+def backup_media_route(kind: str | None, mime: str | None) -> str | None:
+    """Which processor handles a backup media file: 'transcribe', 'extract', or None.
+
+    Mirrors the Forwarded-Inbox routing: audio/video -> transcription, images/PDF
+    -> OCR/extraction. Unknown kinds (stickers, etc.) are left as a label only.
+    """
+    if kind in ("voice_message", "video_message", "video_file", "audio_file"):
+        return "transcribe"
+    mt = (mime or "").lower()
+    if kind == "photo":
+        return "extract"
+    if kind == "file":
+        if mt == "application/pdf" or mt.startswith("image/"):
+            return "extract"
+        if mt.startswith(("audio/", "video/")):
+            return "transcribe"
+    return None
 
 
 def message_text(raw: dict) -> str:
@@ -249,3 +294,89 @@ def render_markdown(chats: list[ParsedChat], *, generated_at: str | None = None)
                 lines.append(msg.text)
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+# --- media inside the zip (OCR / transcription) ----------------------------
+
+# Cap how many media files we OCR/transcribe per import, since each is an LLM
+# call. Bulk exports can hold thousands of photos; this keeps cost bounded.
+DEFAULT_MEDIA_LIMIT = 200
+
+
+def open_backup_zip(data: bytes, filename: str | None = None) -> zipfile.ZipFile | None:
+    """Return an open ZipFile when the upload is a zip (else None), for media access."""
+    is_zip = data[:4] == ZIP_MAGIC or (filename or "").lower().endswith(".zip")
+    if not is_zip:
+        return None
+    try:
+        return zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        return None
+
+
+def resolve_zip_member(zf: zipfile.ZipFile, rel_path: str) -> str | None:
+    """Find the zip member for a media path from result.json.
+
+    Telegram stores media paths relative to the export root (e.g.
+    ``photos/photo_1.jpg``), but a zipped export usually nests everything under a
+    top folder, so we match by exact name first and fall back to a suffix match.
+    """
+    if not rel_path:
+        return None
+    names = zf.namelist()
+    if rel_path in names:
+        return rel_path
+    needle = rel_path.lstrip("./")
+    for name in names:
+        if name == needle or name.endswith("/" + needle):
+            return name
+    return None
+
+
+def make_zip_extractor(zf, tmpdir: Path, *, transcribe=None, ocr=None):
+    """Build an ``extract(rel_path, route) -> str | None`` over a backup zip.
+
+    ``transcribe(path)`` and ``ocr(path)`` are injected (the per-user services),
+    so this stays testable without real LLM calls. The referenced media file is
+    written to ``tmpdir`` before being handed to the chosen processor.
+    """
+    def extract(rel_path: str, route: str) -> str | None:
+        member = resolve_zip_member(zf, rel_path)
+        if not member:
+            return None
+        dest = tmpdir / f"m{abs(hash(rel_path))}{Path(rel_path).suffix}"
+        dest.write_bytes(zf.read(member))
+        if route == "transcribe" and transcribe is not None:
+            return transcribe(dest)
+        if route == "extract" and ocr is not None:
+            return ocr(dest)
+        return None
+
+    return extract
+
+
+def enrich_with_media(chats: list[ParsedChat], *, extract, limit: int = DEFAULT_MEDIA_LIMIT) -> int:
+    """Append OCR/transcription text to messages that carry a media file.
+
+    ``extract(rel_path, route)`` returns text (or None). Errors per item are
+    swallowed so one bad file never aborts a whole import. Returns the number of
+    messages enriched; processing stops once ``limit`` items have been enriched.
+    """
+    enriched = 0
+    for chat in chats:
+        for msg in chat.messages:
+            if enriched >= limit:
+                return enriched
+            if not msg.media_path:
+                continue
+            route = backup_media_route(msg.media_kind, msg.media_mime)
+            if route is None:
+                continue
+            try:
+                text = (extract(msg.media_path, route) or "").strip()
+            except Exception:
+                text = ""
+            if text:
+                msg.text = f"{msg.text}\n{text}".strip() if msg.text else text
+                enriched += 1
+    return enriched

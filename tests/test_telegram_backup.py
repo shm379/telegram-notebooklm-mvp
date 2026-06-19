@@ -10,12 +10,19 @@ from telegram_notebook.db import Repository
 from telegram_notebook.embeddings import EmbeddingService
 from telegram_notebook.pipeline import IngestionPipeline
 from telegram_notebook.telegram_backup import (
+    backup_media_route,
     count_messages,
+    enrich_with_media,
+    make_zip_extractor,
+    media_kind,
     media_label,
+    media_path,
     message_text,
+    open_backup_zip,
     parse_export,
     read_export,
     render_markdown,
+    resolve_zip_member,
 )
 
 SINGLE_CHAT = {
@@ -206,3 +213,101 @@ def test_ingest_backup_isolated_per_owner(tmp_path):
     repo.init()
     asyncio.run(_pipeline(repo).ingest_backup(owner_id=1, chats=parse_export(SINGLE_CHAT)))
     assert repo.keyword_candidates(owner_id=2, query="hello", top_k=5, channel_url=None) == []
+
+
+# --- media inside the zip (OCR / transcription) ----------------------------
+
+MEDIA_CHAT = {
+    "name": "C",
+    "type": "personal_chat",
+    "id": 1,
+    "messages": [
+        {"id": 1, "type": "message", "date": "2021-01-01T00:00:00", "from": "A", "photo": "photos/photo_1.jpg", "text": ""},
+        {
+            "id": 2, "type": "message", "date": "2021-01-01T00:01:00", "from": "A",
+            "file": "voice_messages/audio_1.ogg", "media_type": "voice_message",
+            "mime_type": "audio/ogg", "text": "",
+        },
+        {"id": 3, "type": "message", "date": "2021-01-01T00:02:00", "from": "A", "text": "plain"},
+    ],
+}
+
+
+def test_media_path_and_kind():
+    assert media_path({"photo": "photos/p.jpg"}) == "photos/p.jpg"
+    assert media_path({"file": "files/x.pdf"}) == "files/x.pdf"
+    assert media_path({"photo": "(File not included. Change data exporting settings to download.)"}) is None
+    assert media_kind({"photo": "p.jpg"}) == "photo"
+    assert media_kind({"media_type": "voice_message"}) == "voice_message"
+    assert media_kind({"file": "x"}) == "file"
+
+
+def test_backup_media_route():
+    assert backup_media_route("photo", None) == "extract"
+    assert backup_media_route("voice_message", "audio/ogg") == "transcribe"
+    assert backup_media_route("file", "application/pdf") == "extract"
+    assert backup_media_route("file", "image/png") == "extract"
+    assert backup_media_route("file", "audio/mpeg") == "transcribe"
+    assert backup_media_route("sticker", None) is None
+    assert backup_media_route("file", "text/plain") is None
+
+
+def test_open_backup_zip_returns_none_for_json():
+    assert open_backup_zip(b'{"messages": []}', "result.json") is None
+
+
+def test_resolve_zip_member_matches_nested_path():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ChatExport/photos/photo_1.jpg", b"x")
+    with zipfile.ZipFile(io.BytesIO(buf.getvalue())) as zf:
+        assert resolve_zip_member(zf, "photos/photo_1.jpg") == "ChatExport/photos/photo_1.jpg"
+        assert resolve_zip_member(zf, "missing.jpg") is None
+
+
+def test_enrich_with_media_from_zip(tmp_path):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("Export/result.json", json.dumps(MEDIA_CHAT))
+        zf.writestr("Export/photos/photo_1.jpg", b"OCRTEXT")
+        zf.writestr("Export/voice_messages/audio_1.ogg", b"VOICETEXT")
+    data = buf.getvalue()
+    chats = parse_export(read_export(data, "x.zip"))
+
+    def transcribe(path):
+        return "transcribed:" + path.read_bytes().decode()
+
+    def ocr(path):
+        return "ocr:" + path.read_bytes().decode()
+
+    media_dir = tmp_path / "m"
+    media_dir.mkdir()
+    zf = open_backup_zip(data, "x.zip")
+    extractor = make_zip_extractor(zf, media_dir, transcribe=transcribe, ocr=ocr)
+    count = enrich_with_media(chats, extract=extractor)
+    zf.close()
+
+    assert count == 2
+    msgs = {m.id: m for m in chats[0].messages}
+    assert "ocr:OCRTEXT" in msgs[1].text
+    assert "transcribed:VOICETEXT" in msgs[2].text
+    assert msgs[3].text == "plain"  # text-only message untouched
+    assert "ocr:OCRTEXT" in msgs[1].searchable_text  # now indexable
+
+
+def test_enrich_with_media_respects_limit():
+    chats = parse_export(MEDIA_CHAT)
+
+    def extract(path, route):
+        return "X"
+
+    assert enrich_with_media(chats, extract=extract, limit=1) == 1
+
+
+def test_enrich_with_media_swallows_extractor_errors():
+    chats = parse_export(MEDIA_CHAT)
+
+    def boom(path, route):
+        raise RuntimeError("nope")
+
+    assert enrich_with_media(chats, extract=boom) == 0
