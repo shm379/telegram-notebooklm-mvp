@@ -1,5 +1,21 @@
 # Changelog
 
+## Inline citations for grounded answers (`/ask`) (2026-06-19)
+
+نزدیک‌کردن `/ask` به امضای اصلی NotebookLM: پاسخ‌های grounded با ارجاع درون‌متنی به منبع.
+
+### Behaviour
+- مدل در `/ask` حالا هر ادعا را با ارجاع شماره‌دارِ درون‌متنی مثل `[1]` یا `[1][3]` مستند می‌کند و فقط از منابع داده‌شده استفاده می‌کند.
+- بخش «Sources» در ربات حالا شماره‌گذاری‌شده است و **فقط منابعی را که واقعاً ارجاع داده شده‌اند** فهرست می‌کند (هم‌شماره با ارجاع‌های درون‌متن). اگر مدل هیچ ارجاعی نداد، مثل قبل به‌صورت fallback چند منبع برتر را شماره‌دار نشان می‌دهد.
+- داشبورد وب: هر منبع در پاسخ با `[n]` شماره‌گذاری می‌شود و منابع ارجاع‌داده‌شده با ✓ علامت می‌خورند؛ `/api/ask` حالا فیلد `cited` (شماره‌ی منابع استفاده‌شده) را هم برمی‌گرداند.
+
+### Design
+- ماژول جدید و خالص `citations.py`: `cited_indices(answer, max_n)` (پارس `[n]`، گروه‌ها `[1, 2]`/`[1][3]`، کامای فارسی/عربی، فیلتر خارج از بازه و dedupe)، `source_label`, و `format_sources_block(results, indices, limit, escape)` که روی هم `SearchResult` و dict کار می‌کند و escape دلخواه (مثل `html.escape`) می‌پذیرد.
+- `SearchService.generate_answer`: prompt به‌روز شد تا ارجاع درون‌متنی `[n]` بخواهد (شماره‌گذاری منابع از قبل در context وجود داشت؛ سازگاری امضا حفظ شد).
+
+### Tests
+- `tests/test_citations.py`: تمام منطق `cited_indices`/`source_label`/`format_sources_block` و دو مسیر هندلر `_ask_brain` (فقط منابع ارجاع‌شده، و fallback بدون ارجاع). یک smoke برای رندر `[n]`/`data.cited` در داشبورد در `tests/test_web_api.py`.
+
 ## DOCX / XLSX extraction from Telegram backup attachments (2026-06-18)
 
 استخراج محتوای اسناد ضمیمه‌ی بکاپ تلگرام، به‌صورت محلی و بدون کلید API.
