@@ -378,7 +378,7 @@ Then:
 - **From the bot:** send the `result.json` or `.zip` file directly to the bot. The bot imports it, makes the content searchable, and returns a Markdown copy. (A 20 MB cap because of the Bot API download limit; for a larger file, use the web.)
 - **From the web:** in `/app`, in the "Import Telegram Backup" card, upload the file. The content becomes searchable in the web archive and a Markdown download button appears.
 
-Each chat becomes a synthetic source `backup://<id>` and the import is idempotent (re-importing the same file adds nothing). When you import a **`.zip`** that bundles the exported media, attached **DOCX/XLSX** documents are extracted to text locally (no API key) and folded into the searchable content and the Markdown copy.
+Each chat becomes a synthetic source `backup://<id>` and the import is idempotent (re-importing the same file adds nothing). When you import a **`.zip`** that bundles the exported media, attachments are turned into searchable text just like the rest of the pipeline: **DOCX/XLSX** are parsed locally (no API key), and — when a Gemini/transcription key is configured — **images/PDFs are OCR'd** and **audio/video are transcribed**. The extracted text is folded into the searchable content and the Markdown copy. Without a key, office documents still work and other media keep just their `[kind]` label.
 
 ### API
 

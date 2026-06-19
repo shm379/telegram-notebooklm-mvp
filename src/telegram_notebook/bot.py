@@ -26,7 +26,7 @@ from .jobs import JobWorker
 from .logging_config import setup_logging
 from .media import route_media
 from .office import detect_office_kind, extract_office_text
-from .pipeline import IngestionPipeline
+from .pipeline import IngestionPipeline, build_media_text_extractor
 from .podcast import PodcastUnavailable, build_podcast_source, synthesize_podcast
 from .provider_http import gemini_generate_content
 from .recent import recent_rows
@@ -1919,7 +1919,15 @@ class NotebookBot:
                 return
             local = self.services.api.download_file(str(file_path), tmpdir / file_name)
             data = local.read_bytes()
-            chats = parse_export(read_export(data, file_name), file_resolver=make_zip_file_resolver(data))
+            user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
+            resolver = make_zip_file_resolver(data)
+            media_extractor = build_media_text_extractor(
+                extraction=self._extraction_service_for_user(user),
+                transcription=self._transcription_service_for_user(user),
+            ) if resolver else None
+            chats = parse_export(
+                read_export(data, file_name), file_resolver=resolver, media_extractor=media_extractor
+            )
         except Exception as exc:
             logger.exception("Backup parse failed for user %s", bot_user_id)
             self.services.api.send_message(chat_id, f"I couldn't read that backup: {exc}")
@@ -1932,7 +1940,6 @@ class NotebookBot:
             shutil.rmtree(tmpdir, ignore_errors=True)
             return
 
-        user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
         self.services.api.send_message(
             chat_id, f"Importing {total} message(s) from {len(chats)} chat(s)… this can take a moment."
         )

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -21,6 +24,42 @@ if TYPE_CHECKING:
     from .telegram_backup import ParsedChat
 
 logger = logging.getLogger(__name__)
+
+
+def build_media_text_extractor(
+    *,
+    extraction: ExtractionService | None,
+    transcription: TranscriptionService | None,
+) -> Callable[[str, str, bytes], str] | None:
+    """Adapt the OCR/transcription services to the backup parser's bytes callback.
+
+    Returns a ``(route, file_name, data) -> text`` callable for ``telegram_backup``,
+    or None when neither service is usable (so backups fall back to local office
+    extraction only). The services operate on files, so each call writes the bytes
+    to a short-lived temp file and dispatches by route.
+    """
+    extract_ok = bool(extraction and extraction.enabled)
+    transcribe_ok = bool(transcription and transcription.enabled)
+    if not (extract_ok or transcribe_ok):
+        return None
+
+    def extractor(route: str, file_name: str, data: bytes) -> str:
+        if (route == "extract" and not extract_ok) or (route == "transcribe" and not transcribe_ok):
+            return ""
+        suffix = Path(file_name).suffix
+        tmpdir = Path(tempfile.mkdtemp(prefix="backup_media_"))
+        path = tmpdir / (f"media{suffix}" if suffix else "media")
+        try:
+            path.write_bytes(data)
+            if route == "extract":
+                return extraction.extract(path) or ""
+            if route == "transcribe":
+                return transcription.transcribe_media(path, tmpdir) or ""
+            return ""
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return extractor
 
 # auto_forward(source_label, tags, text, message_url) — push a tagged item to the
 # user's archive channel. Wired only when the user has an archive configured.

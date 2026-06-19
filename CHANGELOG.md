@@ -1,5 +1,20 @@
 # Changelog
 
+## OCR + transcription for Telegram backup attachments (2026-06-18)
+
+تکمیل استخراج ضمیمه‌های بکاپ: علاوه‌بر DOCX/XLSX محلی، حالا عکس/PDF با OCR و صوت/ویدیو با transcription هم به متن قابل‌جستجو تبدیل می‌شوند.
+
+### Behaviour
+- import یک بکاپ `.zip` (همراه با مدیا) حالا ضمیمه‌ها را مثل بقیه‌ی pipeline پردازش می‌کند: DOCX/XLSX محلی، و در صورت وجود کلید Gemini/transcription، عکس/PDF با OCR و صوت/ویدیو با transcription. متن استخراج‌شده هم به محتوای قابل‌جستجو و هم به خروجی Markdown اضافه می‌شود.
+- بدون کلید، فقط office کار می‌کند و بقیه‌ی مدیا فقط برچسب `[kind]` می‌مانند (تنزل آرام). این رفتار با import کانال یکدست است.
+
+### Design
+- `pipeline.build_media_text_extractor(extraction, transcription)` سرویس‌های OCR/transcription را به یک callback `(route, file_name, bytes) -> text` تبدیل می‌کند (نوشتن bytes در فایل موقت و dispatch بر اساس route)؛ در نبود سرویس فعال، `None` برمی‌گرداند.
+- `telegram_backup`: helper `_attachment(raw)` نوع ضمیمه (photo/voice/audio/video/document) را نرمال می‌کند؛ `_attached_media_text` ابتدا office محلی را امتحان می‌کند و سپس از طریق `route_media` به `media_extractor` تزریق‌شده می‌رسد. `parse_export(..., media_extractor=...)`.
+- هر دو call site (bot و web) extractor را از سرویس‌های موجود می‌سازند (bot: کلید کاربر؛ web: کلید سرور).
+
+### Tests
+- `tests/test_backup_documents.py`: routing عکس/PDF/صوت با extractor جعلی، رد sticker، رفتار بدون extractor، و `build_media_text_extractor` (dispatch، None وقتی سرویسی نیست، حالت نیمه‌فعال).
 ## Inline citations for grounded answers (`/ask`) (2026-06-19)
 
 نزدیک‌کردن `/ask` به امضای اصلی NotebookLM: پاسخ‌های grounded با ارجاع درون‌متنی به منبع.
