@@ -7,6 +7,7 @@ from .db import Repository
 from .embeddings import EmbeddingService
 from .models import SearchResult
 from .provider_http import gemini_generate_content, vertex_ai_search
+from .vector_search import rank_by_cosine
 
 logger = logging.getLogger(__name__)
 
@@ -169,13 +170,24 @@ class SearchService:
                 
                 if final_results:
                     return final_results
-                    
-            except Exception:
-                logger.exception("Vertex AI search failed; falling back to keyword search")
 
-        # Fallback to keyword search for now
+            except Exception:
+                logger.exception("Vertex AI search failed; falling back to local search")
+
+        # Local semantic search over stored embeddings — no external index needed.
+        local = self._local_vector_search(
+            owner_id=owner_id,
+            query_vector=query_vector,
+            channel_url=channel_url,
+            tag=tag,
+            top_k=top_k,
+        )
+        if local:
+            return local
+
+        # Last resort: lexical keyword search.
         rows = self.repository.keyword_candidates(owner_id=owner_id, query=query, top_k=top_k, channel_url=channel_url, tag=tag)
-        return [SearchResult(score=1.0, 
+        return [SearchResult(score=1.0,
                              channel_title=r.get("channel_title"),
                              channel_url=r.get("channel_url"),
                              message_url=r.get("message_url"),
@@ -183,3 +195,43 @@ class SearchService:
                              file_name=None,
                              chunk_text=r.get("chunk_text"),
                              caption=None) for r in rows]
+
+    def _local_vector_search(
+        self,
+        *,
+        owner_id: int,
+        query_vector: list[float],
+        channel_url: str | None,
+        tag: str | None,
+        top_k: int,
+    ) -> list[SearchResult]:
+        """Rank stored chunk embeddings against the query vector (cosine), in process.
+
+        Over-fetches before de-duplicating by message so collapsing several chunks
+        of the same post doesn't starve the result set.
+        """
+        candidates = self.repository.embedding_candidates(owner_id=owner_id, channel_url=channel_url, tag=tag)
+        if not candidates:
+            return []
+        results: list[SearchResult] = []
+        seen_messages: set[str | None] = set()
+        for candidate, score in rank_by_cosine(query_vector, candidates, top_k=top_k * 4):
+            message_url = candidate.get("message_url")
+            if message_url in seen_messages:
+                continue
+            seen_messages.add(message_url)
+            results.append(
+                SearchResult(
+                    score=score,
+                    channel_title=candidate.get("channel_title"),
+                    channel_url=candidate.get("channel_url") or "",
+                    message_url=message_url,
+                    media_kind=candidate.get("media_kind") or "text",
+                    file_name=candidate.get("file_name"),
+                    chunk_text=candidate.get("chunk_text") or "",
+                    caption=candidate.get("caption"),
+                )
+            )
+            if len(results) >= top_k:
+                break
+        return results

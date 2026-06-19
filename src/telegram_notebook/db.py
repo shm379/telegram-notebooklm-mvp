@@ -404,13 +404,14 @@ class Repository:
                 rows = conn.execute(sql + " LIMIT ?", params + [top_k]).fetchall()
                 return [dict(r) for r in rows]
 
-    def embedding_candidates(self, *, owner_id: int, channel_url: str | None) -> list[dict[str, Any]]:
+    def embedding_candidates(self, *, owner_id: int, channel_url: str | None, tag: str | None = None) -> list[dict[str, Any]]:
         with self.lock:
             with sqlite3.connect(self.path) as conn:
                 conn.row_factory = sqlite3.Row
                 sql = """
                     SELECT c.id as chunk_id, c.text as chunk_text, c.embedding as embedding_json,
-                           mi.media_kind, m.message_url, ch.channel_title, ch.channel_url
+                           mi.media_kind, mi.file_name, m.message_url, m.caption,
+                           ch.channel_title, ch.channel_url
                     FROM chunks c
                     JOIN media_items mi ON c.media_item_id = mi.id
                     JOIN messages m ON mi.message_id = m.id
@@ -421,6 +422,11 @@ class Repository:
                 if channel_url:
                     sql += " AND ch.channel_url = ?"
                     params.append(channel_url)
+                if tag:
+                    sql += """ AND mi.id IN (
+                        SELECT media_item_id FROM content_tags WHERE owner_id = ? AND tag = ?
+                    )"""
+                    params.extend([owner_id, tag])
 
                 rows = conn.execute(sql, params).fetchall()
                 results = []
