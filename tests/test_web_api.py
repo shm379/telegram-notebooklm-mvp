@@ -81,3 +81,9 @@ def test_index_html_has_library_panel():
     assert "/api/recent" in web.INDEX_HTML
     assert "/api/timeline" in web.INDEX_HTML
     assert 'id="libraryTimeline"' in web.INDEX_HTML
+
+
+def test_index_html_renders_citation_numbers():
+    # The Ask panel numbers each source and marks the ones the answer cited.
+    assert "data.cited" in web.INDEX_HTML
+    assert "[${n}]" in web.INDEX_HTML

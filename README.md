@@ -57,7 +57,7 @@ The answer should come with the source, the message link, and the related texts.
 - chunk کردن متن‌ها
 - ساخت embedding برای جستجوی معنایی
 - جستجوی keyword + semantic search
-- پاسخ‌سازی اولیه با RAG از روی نتایج جستجو
+- پاسخ‌سازی RAG از روی نتایج جستجو با **ارجاع درون‌متنی شماره‌دار** (`[1]`, `[2]`) و فهرست منابعِ ارجاع‌داده‌شده — به سبک grounded answers در NotebookLM
 - داشبورد وب سبک با `Python http.server`
 - ربات تلگرام برای orchestration و دستورات اصلی
 - اتصال اکانت واقعی تلگرام کاربر با session string از طریق Telethon
