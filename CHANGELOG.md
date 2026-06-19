@@ -1,5 +1,22 @@
 # Changelog
 
+## Local semantic (vector) search (2026-06-19)
+
+پیاده‌سازی جستجوی معنایی محلی روی embeddingهای ذخیره‌شده — قدم اول و پیش‌نیاز واقعیِ مهاجرت به pgvector/Qdrant برای دیتاست بزرگ.
+
+### Behaviour
+- تا پیش از این، اگر کلید embedding تنظیم بود ولی Vertex AI نه، `/search` و `/ask` بی‌سروصدا به جستجوی keyword (`LIKE`) برمی‌گشتند؛ embeddingها ذخیره می‌شدند ولی هیچ‌جا برای رتبه‌بندی استفاده نمی‌شدند. حالا یک جستجوی برداری **درون‌فرایندی** (cosine) روی chunkهای دارای embedding اجرا می‌شود.
+- ترتیب fallback: Vertex AI (در صورت تنظیم) → semantic محلی → keyword. فیلترهای `--source`/`--tag` و ایزولاسیون per-owner در همه‌ی مسیرها حفظ می‌شوند.
+
+### Design
+- ماژول خالص `vector_search.py`: `cosine_similarity` و `rank_by_cosine(query, candidates, *, top_k)` (پارس‌کردن embedding از JSON، رد آیتم‌های بدون بردار، مرتب‌سازی نزولی).
+- `Repository.embedding_candidates` (که قبلاً کد مرده بود) حالا `tag` و فیلدهای `file_name`/`caption` را هم می‌دهد و در `SearchService._local_vector_search` استفاده می‌شود (با over-fetch و dedup بر اساس پیام).
+- این مسیر O(n) است و عمداً پشت همان call site نگه داشته شده تا جایگزینی بعدی با nearest-neighbor ایندکس‌دار (pgvector/Qdrant) کم‌هزینه باشد.
+
+### Tests
+- `tests/test_vector_search.py`: قرارداد cosine و ranking (ترتیب/سقف/پارس JSON/ورودی خالی).
+- `tests/test_search_local.py`: رتبه‌بندی معنایی روی Repository واقعی، سقف top_k، فیلتر source/tag، fallback به keyword (نبود بردار/غیرفعال‌بودن embedding)، و ایزولاسیون per-owner.
+
 ## OCR + transcription for Telegram backup attachments (2026-06-18)
 
 تکمیل استخراج ضمیمه‌های بکاپ: علاوه‌بر DOCX/XLSX محلی، حالا عکس/PDF با OCR و صوت/ویدیو با transcription هم به متن قابل‌جستجو تبدیل می‌شوند.

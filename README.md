@@ -56,7 +56,7 @@ The answer should come with the source, the message link, and the related texts.
 - تبدیل صوت/ویدیو به متن با OpenAI یا Gemini
 - chunk کردن متن‌ها
 - ساخت embedding برای جستجوی معنایی
-- جستجوی keyword + semantic search
+- جستجوی keyword + **semantic search محلی** (cosine روی embeddingهای ذخیره‌شده، بدون نیاز به ایندکس ابری؛ در صورت تنظیم Vertex AI از آن استفاده می‌شود و در نبود embedding به keyword برمی‌گردد)
 - پاسخ‌سازی RAG از روی نتایج جستجو با **ارجاع درون‌متنی شماره‌دار** (`[1]`, `[2]`) و فهرست منابعِ ارجاع‌داده‌شده — به سبک grounded answers در NotebookLM
 - داشبورد وب سبک با `Python http.server`
 - ربات تلگرام برای orchestration و دستورات اصلی
