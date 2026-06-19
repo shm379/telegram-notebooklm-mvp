@@ -602,7 +602,24 @@ INDEX_HTML = """
           searchStatus.textContent = "پاسخ آماده شد!";
           brainAnswer.style.display = "block";
           answerText.textContent = data.answer;
-          displayResults(data.sources);
+          const cited = new Set(data.cited || []);
+          results.innerHTML = "";
+          (data.sources || []).forEach((item, idx) => {
+            const n = idx + 1;
+            const div = document.createElement("article");
+            div.className = "result";
+            div.innerHTML = `
+              <div class="meta">
+                <strong>[${n}]${cited.has(n) ? " ✓" : ""}</strong>
+                ${item.channel_title || item.channel_url}
+                • ${item.media_kind}
+                • score=${item.score}
+                ${item.message_url ? `• <a href="${item.message_url}" target="_blank" rel="noreferrer">post</a>` : ""}
+              </div>
+              <div>${item.chunk_text}</div>
+            `;
+            results.appendChild(div);
+          });
         } catch (error) {
           searchStatus.textContent = error.message;
         }
@@ -1248,11 +1265,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                     project_id=state.settings.vertex_project_id,
                     region=state.settings.vertex_region or "us-central1",
                 )
+                from . import citations
                 self._send_json(
                     {
                         "query": query,
                         "answer": answer,
                         "sources": [result.to_dict() for result in results],
+                        "cited": citations.cited_indices(answer, len(results)),
                     }
                 )
             except Exception as exc:

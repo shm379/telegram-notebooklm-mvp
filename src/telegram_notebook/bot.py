@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import toolset
+from . import citations, toolset
 from .bot_api import TelegramBotApi
 from .clustering import build_topics, label_cluster
 from .config import Settings, get_settings
@@ -929,8 +929,11 @@ class NotebookBot:
         rendered, parse_mode = to_telegram_markdown(f"**AI Answer:**\n\n{answer}")
         self.services.api.send_message(chat_id=chat_id, text=rendered, parse_mode=parse_mode)
         if results:
-            sources_text = "\n".join([f"- {r.channel_title or r.channel_url} ({r.message_url})" for r in results[:3]])
-            self.services.api.send_message(chat_id=chat_id, text=f"<b>Sources:</b>\n{sources_text}", disable_web_page_preview=True)
+            used = citations.cited_indices(answer, len(results))
+            block = citations.format_sources_block(
+                results, used or None, limit=None if used else 3, escape=html.escape,
+            )
+            self.services.api.send_message(chat_id=chat_id, text=f"<b>Sources:</b>\n{block}", disable_web_page_preview=True)
 
     def _handle_sources(self, chat_id: int, bot_user_id: int) -> None:
         ch = self.services.repository.list_channels(owner_id=bot_user_id)
