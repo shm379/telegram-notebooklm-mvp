@@ -3,18 +3,23 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 
+from .llm import ollama_embed
 from .provider_http import gemini_embed_text
 
 
 class EmbeddingService:
-    def __init__(self, *, provider: str, api_key: str | None, model: str) -> None:
+    def __init__(self, *, provider: str, api_key: str | None, model: str, base_url: str | None = None) -> None:
         self.provider = provider
         self.model = model
         self.api_key = api_key
+        self.base_url = base_url
         self.client = None
 
     @property
     def enabled(self) -> bool:
+        # Local providers (Ollama) need no API key; cloud providers do.
+        if self.provider in ("ollama", "local"):
+            return True
         return self.api_key is not None
 
     def _get_client(self):
@@ -31,6 +36,9 @@ class EmbeddingService:
         if not self.api_key and not project_id:
             # If no API key, we might be using gcloud auth which needs project_id
             pass
+
+        if self.provider in ("ollama", "local"):
+            return ollama_embed(base_url=self.base_url, model=self.model, text=text)
 
         if self.provider == "gemini":
             return gemini_embed_text(

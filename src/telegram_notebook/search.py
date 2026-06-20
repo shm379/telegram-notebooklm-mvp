@@ -5,8 +5,9 @@ from typing import Any
 
 from .db import Repository
 from .embeddings import EmbeddingService
+from .llm import generate_text
 from .models import SearchResult
-from .provider_http import gemini_generate_content, vertex_ai_search
+from .provider_http import vertex_ai_search
 from .vector_search import rank_by_cosine
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,9 @@ class SearchService:
         *,
         query: str,
         results: list[SearchResult],
+        provider: str = "ollama",
+        model: str | None = None,
+        base_url: str | None = None,
         api_key: str | None = None,
         project_id: str | None = None,
         region: str = "us-central1",
@@ -49,11 +53,14 @@ class SearchService:
 
 پاسخ مستند (به زبان فارسی، با ارجاع‌های [شماره]):"""
 
-        return gemini_generate_content(
-            api_key=api_key,
+        return generate_text(
+            provider=provider,
+            model=model,
             prompt=prompt,
+            base_url=base_url,
+            api_key=api_key,
             project_id=project_id,
-            region=region
+            region=region,
         )
 
     @staticmethod
@@ -79,6 +86,9 @@ class SearchService:
         *,
         scope_label: str,
         items: list[dict[str, Any]],
+        provider: str = "ollama",
+        model: str | None = None,
+        base_url: str | None = None,
         api_key: str | None = None,
         project_id: str | None = None,
         region: str = "us-central1",
@@ -86,9 +96,12 @@ class SearchService:
         if not items:
             return "موردی برای خلاصه‌سازی پیدا نشد."
         prompt = self._build_summary_prompt(scope_label, items)
-        return gemini_generate_content(
-            api_key=api_key,
+        return generate_text(
+            provider=provider,
+            model=model,
             prompt=prompt,
+            base_url=base_url,
+            api_key=api_key,
             project_id=project_id,
             region=region,
         )

@@ -23,8 +23,8 @@ from .clustering import build_topics, label_cluster
 from .config import get_settings
 from .db import Repository, connect
 from .embeddings import EmbeddingService
+from .llm import generate_text
 from .logging_config import setup_logging
-from .provider_http import gemini_generate_content
 from .recent import recent_rows
 from .search import SearchService
 from .stats import format_stats
@@ -204,10 +204,34 @@ class McpServer:
         return self.search_service.generate_answer(
             query=question,
             results=results,
-            api_key=self.settings.gemini_api_key,
-            project_id=self.settings.vertex_project_id,
-            region=self.settings.vertex_region or "us-central1",
+            **self._llm_kwargs(),
         )
+
+    def _llm_kwargs(self) -> dict:
+        """Generation kwargs for the configured chat provider (default: Ollama)."""
+        s = self.settings
+        provider = (getattr(s, "llm_provider", None) or "ollama").lower()
+        api_key = None
+        if provider == "gemini":
+            api_key = getattr(s, "gemini_api_key", None)
+        elif provider == "openai":
+            api_key = getattr(s, "openai_api_key", None)
+        return {
+            "provider": provider,
+            "model": getattr(s, "llm_model", None),
+            "base_url": getattr(s, "ollama_base_url", None),
+            "api_key": api_key,
+            "project_id": getattr(s, "vertex_project_id", None),
+            "region": getattr(s, "vertex_region", None) or "us-central1",
+        }
+
+    def _llm_available(self) -> bool:
+        provider = (getattr(self.settings, "llm_provider", None) or "ollama").lower()
+        if provider in ("ollama", "local"):
+            return True
+        if provider == "gemini":
+            return bool(getattr(self.settings, "gemini_api_key", None))
+        return bool(getattr(self.settings, "openai_api_key", None))
 
     def _tool_list_topics(self, args: dict) -> str:
         items = self.repository.chunks_with_embeddings(
@@ -216,16 +240,13 @@ class McpServer:
         if not items:
             return "No embedded content to cluster yet."
         namer = None
-        if self.settings.gemini_api_key:
+        if self._llm_available():
+            kwargs = self._llm_kwargs()
+
             def namer(texts: list[str]) -> str:
                 return label_cluster(
                     texts,
-                    generate=lambda prompt: gemini_generate_content(
-                        api_key=self.settings.gemini_api_key,
-                        prompt=prompt,
-                        project_id=self.settings.vertex_project_id,
-                        region=self.settings.vertex_region or "us-central1",
-                    ),
+                    generate=lambda prompt: generate_text(prompt=prompt, **kwargs),
                 )
         topics = build_topics(items, namer=namer)
         return "\n".join(f"- {t['label']} ({t['size']})" for t in topics)

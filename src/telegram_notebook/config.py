@@ -49,10 +49,14 @@ class Settings:
     transcription_model: str
     embedding_provider: str
     embedding_model: str
+    llm_provider: str
+    llm_model: str
+    ollama_base_url: str
     chunk_size: int
     chunk_overlap: int
     default_result_limit: int
     web_api_token: str | None
+    miniapp_url: str | None
     podcast_tts_model: str
     podcast_llm_model: str | None
 
@@ -86,21 +90,29 @@ def get_settings() -> Settings:
         telegram_proxy_host=_str_env("TELEGRAM_PROXY_HOST"),
         telegram_proxy_port=_int_env("TELEGRAM_PROXY_PORT"),
         telegram_proxy_type=_str_env("TELEGRAM_PROXY_TYPE"),
+        # Local-first defaults: transcription via local Whisper, embeddings + chat
+        # via a local Ollama server. Cloud providers stay available when selected.
         transcription_provider=(
-            _str_env("TRANSCRIPTION_PROVIDER", "openai") or "openai"
+            _str_env("TRANSCRIPTION_PROVIDER", "local") or "local"
         ).lower(),
         transcription_model=_str_env(
             "TRANSCRIPTION_MODEL",
-            "gpt-4o-mini-transcribe",
+            "base",
         )
-        or "gpt-4o-mini-transcribe",
-        embedding_provider=(_str_env("EMBEDDING_PROVIDER", "openai") or "openai").lower(),
-        embedding_model=_str_env("EMBEDDING_MODEL", "text-embedding-3-small")
-        or "text-embedding-3-small",
+        or "base",
+        embedding_provider=(_str_env("EMBEDDING_PROVIDER", "ollama") or "ollama").lower(),
+        embedding_model=_str_env("EMBEDDING_MODEL", "nomic-embed-text")
+        or "nomic-embed-text",
+        llm_provider=(_str_env("LLM_PROVIDER", "ollama") or "ollama").lower(),
+        llm_model=_str_env("LLM_MODEL", "llama3.1") or "llama3.1",
+        ollama_base_url=_str_env("OLLAMA_BASE_URL", "http://localhost:11434")
+        or "http://localhost:11434",
         chunk_size=_int_env("CHUNK_SIZE") or 900,
         chunk_overlap=_int_env("CHUNK_OVERLAP") or 120,
         default_result_limit=_int_env("DEFAULT_RESULT_LIMIT") or 8,
         web_api_token=_str_env("WEB_API_TOKEN"),
+        # Public HTTPS URL where /miniapp is served (for the Telegram Mini App button).
+        miniapp_url=_str_env("MINIAPP_URL"),
         # TTS engine for /podcast. "edge" needs no API key (default); "openai"/
         # "gemini"/"elevenlabs" use the matching provider key.
         podcast_tts_model=(_str_env("PODCAST_TTS_MODEL", "edge") or "edge").lower(),

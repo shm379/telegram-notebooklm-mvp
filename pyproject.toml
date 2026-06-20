@@ -17,6 +17,9 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 # Optional: Audio Overview / podcast generation from the archive (/podcast).
 # Heavy, so it is opt-in: pip install ".[podcast]"
 podcast = ["podcastfy>=0.4.0"]
+# Optional: local, offline transcription with Whisper (no cloud key needed).
+# Heavy (model weights + CTranslate2), so it is opt-in: pip install ".[local]"
+local = ["faster-whisper>=1.0.0"]
 
 [build-system]
 requires = ["hatchling"]

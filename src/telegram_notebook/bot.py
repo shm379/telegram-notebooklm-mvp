@@ -23,6 +23,7 @@ from .export import build_markdown_export
 from .extraction import ExtractionService
 from .formatting import to_telegram_markdown
 from .jobs import JobWorker
+from .llm import generate_text
 from .logging_config import setup_logging
 from .media import route_media
 from .office import detect_office_kind, extract_office_text
@@ -50,6 +51,63 @@ from .timeline import build_timeline
 from .transcription import TranscriptionService
 
 logger = logging.getLogger(__name__)
+
+
+# --- LLM routing (local-first via Ollama; cloud optional) --------------------
+# These take ``settings`` explicitly so they work with any settings-like object.
+# NOTE: the getattr default below is "gemini" only so legacy/test settings objects
+# that predate llm_provider keep their cloud behavior. The real Settings object
+# always carries llm_provider (default "ollama").
+def _llm_kwargs_for(settings, user: dict | None) -> dict:
+    """Generation kwargs for SearchService.generate_answer / summarize."""
+    provider = (getattr(settings, "llm_provider", None) or "gemini").lower()
+    api_key = None
+    if provider == "gemini":
+        api_key = (user.get("gemini_api_key") if user else None) or getattr(settings, "gemini_api_key", None)
+    elif provider == "openai":
+        api_key = (user.get("openai_api_key") if user else None) or getattr(settings, "openai_api_key", None)
+    return {
+        "provider": provider,
+        "model": getattr(settings, "llm_model", None),
+        "base_url": getattr(settings, "ollama_base_url", None),
+        "api_key": api_key,
+        "project_id": getattr(settings, "vertex_project_id", None),
+        "region": getattr(settings, "vertex_region", None) or "us-central1",
+    }
+
+
+def _llm_callable_for(settings, user: dict | None):
+    """A ``generate(prompt) -> str`` for tagging/clustering, or None if unavailable."""
+    provider = (getattr(settings, "llm_provider", None) or "gemini").lower()
+    if provider == "gemini":
+        api_key = (user.get("gemini_api_key") if user else None) or getattr(settings, "gemini_api_key", None)
+        if not api_key:
+            return None
+        # Reference the module global so tests can monkeypatch gemini_generate_content.
+        return lambda prompt: gemini_generate_content(
+            api_key=api_key,
+            prompt=prompt,
+            project_id=getattr(settings, "vertex_project_id", None),
+            region=getattr(settings, "vertex_region", None) or "us-central1",
+        )
+    if provider == "openai":
+        api_key = (user.get("openai_api_key") if user else None) or getattr(settings, "openai_api_key", None)
+        if not api_key:
+            return None
+        return lambda prompt: generate_text(
+            provider="openai", model=getattr(settings, "llm_model", None), prompt=prompt, api_key=api_key
+        )
+    # ollama / local — no API key required.
+    return lambda prompt: generate_text(
+        provider=provider,
+        model=getattr(settings, "llm_model", None),
+        prompt=prompt,
+        base_url=getattr(settings, "ollama_base_url", None),
+    )
+
+
+def _llm_available_for(settings, user: dict | None) -> bool:
+    return _llm_callable_for(settings, user) is not None
 
 
 @dataclass(slots=True)
@@ -141,6 +199,12 @@ class NotebookBot:
     def run_forever(self) -> None:
         logger.info("Bot polling started")
         self.worker.start()
+        miniapp_url = getattr(self.services.settings, "miniapp_url", None)
+        if miniapp_url:
+            try:
+                self.services.api.set_chat_menu_button(url=miniapp_url, text="Open App")
+            except Exception:
+                logger.exception("Failed to set Mini App menu button")
         try:
             self.watcher.start_all()
         except Exception:
@@ -211,6 +275,21 @@ class NotebookBot:
 
     def _search_service_for_user(self, user: dict | None) -> SearchService:
         return SearchService(self.services.repository, self._embedding_service_for_user(user))
+
+    def _handle_open_app(self, chat_id: int) -> None:
+        """Send a button that launches the cinematic Telegram Mini App."""
+        url = getattr(self.services.settings, "miniapp_url", None)
+        if not url:
+            self.services.api.send_message(
+                chat_id=chat_id,
+                text="Mini App isn't configured yet. Set MINIAPP_URL to a public HTTPS URL that serves /miniapp.",
+            )
+            return
+        self.services.api.send_message(
+            chat_id=chat_id,
+            text="🚀 پنل سینمایی نوت‌بوک تلگرام را باز کن و از آرشیو خودت بپرس:",
+            reply_markup=self.services.api.web_app_keyboard("باز کردن Mini App", url),
+        )
 
     def handle_update(self, update: dict[str, object]) -> None:
         callback = update.get("callback_query")
@@ -289,6 +368,8 @@ class NotebookBot:
             self._send_welcome(chat_id)
         elif command == "/help":
             self._send_help(chat_id)
+        elif command == "/app":
+            self._handle_open_app(chat_id)
         elif command == "/version":
             self.services.api.send_message(chat_id=chat_id, text="Bot Version: v5.0 (Stabilized Core)")
         elif command == "/connect":
@@ -905,10 +986,7 @@ class NotebookBot:
             self.services.api.send_message(chat_id=chat_id, text="Usage: /ask <question> [--source <url>] [--tag <tag>]")
             return
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
-        gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
         vertex_config = self._vertex_search_config(user)
-        v_project = vertex_config["project_id"] if vertex_config else self.services.settings.vertex_project_id
-        v_region = vertex_config["region"] if vertex_config else self.services.settings.vertex_region
 
         self.services.api.send_message(chat_id=chat_id, text="AI Brain is thinking...")
         try:
@@ -917,9 +995,7 @@ class NotebookBot:
             answer = search_service.generate_answer(
                 query=query,
                 results=results,
-                api_key=gemini_api_key,
-                project_id=v_project,
-                region=v_region,
+                **_llm_kwargs_for(self.services.settings, user),
             )
         except Exception:
             logger.exception("Ask failed for user %s", bot_user_id)
@@ -1008,23 +1084,14 @@ class NotebookBot:
         """Recompute tags for all of the user's stored content from the current rules.
 
         Keyword rules run locally; AI rules (if any) are evaluated with one LLM call
-        per item, and are skipped with a note when no Gemini API key is available.
+        per item, and are skipped with a note when no LLM backend is available.
         """
         rules = self.services.repository.list_rules(owner_id=bot_user_id)
         ai_rules = [r for r in rules if r.get("kind") == "ai"]
 
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
-        api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
-        ai_active = bool(ai_rules) and bool(api_key)
-        generate = None
-        if ai_active:
-            def generate(prompt: str) -> str:
-                return gemini_generate_content(
-                    api_key=api_key,
-                    prompt=prompt,
-                    project_id=self.services.settings.vertex_project_id,
-                    region=self.services.settings.vertex_region or "us-central1",
-                )
+        generate = _llm_callable_for(self.services.settings, user) if ai_rules else None
+        ai_active = generate is not None
 
         self.services.repository.clear_tags(owner_id=bot_user_id)
         tagged = 0
@@ -1040,8 +1107,8 @@ class NotebookBot:
                 tagged += 1
 
         msg = f"Re-tagged {tagged} item(s) using {len(rules)} rule(s)."
-        if ai_rules and not api_key:
-            msg += f"\nNote: {len(ai_rules)} AI rule(s) were skipped — connect a Gemini API key (via /connect) to enable them."
+        if ai_rules and not ai_active:
+            msg += f"\nNote: {len(ai_rules)} AI rule(s) were skipped — start a local Ollama server, or connect an API key (via /connect), to enable them."
         self.services.api.send_message(chat_id, msg)
 
     @staticmethod
@@ -1081,19 +1148,13 @@ class NotebookBot:
             )
             return
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
-        gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
-        vertex_config = self._vertex_search_config(user)
-        v_project = vertex_config["project_id"] if vertex_config else self.services.settings.vertex_project_id
-        v_region = vertex_config["region"] if vertex_config else self.services.settings.vertex_region
 
         self.services.api.send_message(chat_id, f"Summarizing {scope_label} ({len(items)} item(s))...")
         try:
             answer = self._search_service_for_user(user).summarize(
                 scope_label=scope_label,
                 items=items,
-                api_key=gemini_api_key,
-                project_id=v_project,
-                region=v_region,
+                **_llm_kwargs_for(self.services.settings, user),
             )
         except Exception:
             logger.exception("Summarize failed for user %s", bot_user_id)
@@ -1118,9 +1179,8 @@ class NotebookBot:
             return
 
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
-        gemini_api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
-        if not gemini_api_key:
-            # Without an LLM key, fall back to a plain count + sources digest.
+        if not _llm_available_for(self.services.settings, user):
+            # Without an LLM backend, fall back to a plain count + sources digest.
             sources = sorted({
                 (it.get("channel_title") or it.get("channel_url"))
                 for it in items if it.get("channel_title") or it.get("channel_url")
@@ -1131,13 +1191,10 @@ class NotebookBot:
             self.services.api.send_message(chat_id, msg)
             return
 
-        vertex_config = self._vertex_search_config(user)
-        v_project = vertex_config["project_id"] if vertex_config else self.services.settings.vertex_project_id
-        v_region = vertex_config["region"] if vertex_config else self.services.settings.vertex_region
         self.services.api.send_message(chat_id, f"Building your digest for {scope_label} ({len(items)} item(s))...")
         try:
             answer = self._search_service_for_user(user).summarize(
-                scope_label=scope_label, items=items, api_key=gemini_api_key, project_id=v_project, region=v_region,
+                scope_label=scope_label, items=items, **_llm_kwargs_for(self.services.settings, user),
             )
         except Exception:
             logger.exception("Digest failed for user %s", bot_user_id)
@@ -1252,38 +1309,22 @@ class NotebookBot:
         self.services.api.send_message(chat_id, "\n".join(lines))
 
     def _topic_namer(self, bot_user_id: int):
-        """Return an LLM cluster-labeller when a Gemini key is available, else None."""
+        """Return an LLM cluster-labeller when an LLM backend is available, else None."""
         user = self.services.repository.get_bot_user(bot_user_id=bot_user_id)
-        api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
-        if not api_key:
+        generate = _llm_callable_for(self.services.settings, user)
+        if generate is None:
             return None
 
         def namer(texts: list[str]) -> str:
-            return label_cluster(
-                texts,
-                generate=lambda prompt: gemini_generate_content(
-                    api_key=api_key,
-                    prompt=prompt,
-                    project_id=self.services.settings.vertex_project_id,
-                    region=self.services.settings.vertex_region or "us-central1",
-                ),
-            )
+            return label_cluster(texts, generate=generate)
 
         return namer
 
     def _ai_classifier_for_user(self, user: dict | None):
-        """LLM callable for AI-rule auto-tagging, or None unless the user opted in (with a key)."""
+        """LLM callable for AI-rule auto-tagging, or None unless the user opted in."""
         if not (user and user.get("ai_autotag")):
             return None
-        api_key = (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
-        if not api_key:
-            return None
-        return lambda prompt: gemini_generate_content(
-            api_key=api_key,
-            prompt=prompt,
-            project_id=self.services.settings.vertex_project_id,
-            region=self.services.settings.vertex_region or "us-central1",
-        )
+        return _llm_callable_for(self.services.settings, user)
 
     def _handle_airules(self, chat_id: int, bot_user_id: int, args: str) -> None:
         choice = args.strip().lower()
