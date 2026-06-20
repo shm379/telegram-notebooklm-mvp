@@ -138,7 +138,7 @@ def test_summarize_by_collection(tmp_path, monkeypatch):
     captured = {}
 
     class FakeSearch:
-        def summarize(self, *, scope_label, items, api_key, project_id, region):
+        def summarize(self, *, scope_label, items, **kwargs):
             captured["scope"] = scope_label
             captured["texts"] = sorted(i["text"] for i in items)
             return "the summary"

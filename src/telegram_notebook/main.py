@@ -44,6 +44,9 @@ class RuntimeConfig:
     transcription_model: str
     embedding_provider: str
     embedding_model: str
+    llm_provider: str
+    llm_model: str
+    ollama_base_url: str
     openai_enabled: bool
     gemini_enabled: bool
 
@@ -64,11 +67,13 @@ class AppState:
                 provider=self.settings.embedding_provider,
                 api_key=self._api_key_for(self.settings.embedding_provider),
                 model=self.settings.embedding_model,
+                base_url=self.settings.ollama_base_url,
             )
             self.transcription = TranscriptionService(
                 provider=self.settings.transcription_provider,
                 api_key=self._api_key_for(self.settings.transcription_provider),
                 model=self.settings.transcription_model,
+                base_url=self.settings.ollama_base_url,
             )
             # OCR/PDF extraction is Gemini-only; DOCX/XLSX are parsed locally.
             self.extraction = ExtractionService(
@@ -111,9 +116,24 @@ class AppState:
             transcription_model=self.settings.transcription_model,
             embedding_provider=self.settings.embedding_provider,
             embedding_model=self.settings.embedding_model,
+            llm_provider=self.settings.llm_provider,
+            llm_model=self.settings.llm_model,
+            ollama_base_url=self.settings.ollama_base_url,
             openai_enabled=bool(self.settings.openai_api_key),
             gemini_enabled=bool(self.settings.gemini_api_key),
         )
+
+    def llm_params(self) -> dict[str, object]:
+        """Generation kwargs for the configured chat/RAG provider (default: Ollama)."""
+        s = self.settings
+        return {
+            "provider": s.llm_provider,
+            "model": s.llm_model,
+            "base_url": s.ollama_base_url,
+            "api_key": self._api_key_for(s.llm_provider),
+            "project_id": s.vertex_project_id,
+            "region": s.vertex_region or "us-central1",
+        }
 
     def list_models(self, *, provider: str, capability: str | None) -> list[dict[str, object]]:
         provider = provider.lower()
@@ -1493,6 +1513,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "transcription_model",
                 "embedding_provider",
                 "embedding_model",
+                "llm_provider",
+                "llm_model",
+                "ollama_base_url",
                 "gemini_api_key",
                 "openai_api_key",
             ):
@@ -1571,13 +1594,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     top_k=5,
                     vertex_config=vertex_config,
                 )
-                # 2. Generate answer
+                # 2. Generate answer with the configured chat provider (default: Ollama)
                 answer = state.search_service.generate_answer(
                     query=query,
                     results=results,
-                    api_key=state.settings.gemini_api_key,
-                    project_id=state.settings.vertex_project_id,
-                    region=state.settings.vertex_region or "us-central1",
+                    **state.llm_params(),
                 )
                 from . import citations
                 self._send_json(
