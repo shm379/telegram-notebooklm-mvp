@@ -199,6 +199,12 @@ class NotebookBot:
     def run_forever(self) -> None:
         logger.info("Bot polling started")
         self.worker.start()
+        miniapp_url = getattr(self.services.settings, "miniapp_url", None)
+        if miniapp_url:
+            try:
+                self.services.api.set_chat_menu_button(url=miniapp_url, text="Open App")
+            except Exception:
+                logger.exception("Failed to set Mini App menu button")
         try:
             self.watcher.start_all()
         except Exception:
@@ -269,6 +275,21 @@ class NotebookBot:
 
     def _search_service_for_user(self, user: dict | None) -> SearchService:
         return SearchService(self.services.repository, self._embedding_service_for_user(user))
+
+    def _handle_open_app(self, chat_id: int) -> None:
+        """Send a button that launches the cinematic Telegram Mini App."""
+        url = getattr(self.services.settings, "miniapp_url", None)
+        if not url:
+            self.services.api.send_message(
+                chat_id=chat_id,
+                text="Mini App isn't configured yet. Set MINIAPP_URL to a public HTTPS URL that serves /miniapp.",
+            )
+            return
+        self.services.api.send_message(
+            chat_id=chat_id,
+            text="🚀 پنل سینمایی نوت‌بوک تلگرام را باز کن و از آرشیو خودت بپرس:",
+            reply_markup=self.services.api.web_app_keyboard("باز کردن Mini App", url),
+        )
 
     def handle_update(self, update: dict[str, object]) -> None:
         callback = update.get("callback_query")
@@ -347,6 +368,8 @@ class NotebookBot:
             self._send_welcome(chat_id)
         elif command == "/help":
             self._send_help(chat_id)
+        elif command == "/app":
+            self._handle_open_app(chat_id)
         elif command == "/version":
             self.services.api.send_message(chat_id=chat_id, text="Bot Version: v5.0 (Stabilized Core)")
         elif command == "/connect":

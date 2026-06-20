@@ -131,3 +131,15 @@ class TelegramBotApi:
     @staticmethod
     def remove_keyboard() -> dict[str, object]:
         return {"remove_keyboard": True}
+
+    @staticmethod
+    def web_app_keyboard(text: str, url: str) -> dict[str, object]:
+        """An inline keyboard with a single button that launches a Mini App."""
+        return {"inline_keyboard": [[{"text": text, "web_app": {"url": url}}]]}
+
+    def set_chat_menu_button(self, *, url: str, text: str = "Open App") -> None:
+        """Set the bot-wide menu button (the ☰ next to the input) to a Mini App."""
+        self.call(
+            "setChatMenuButton",
+            {"menu_button": {"type": "web_app", "text": text, "web_app": {"url": url}}},
+        )

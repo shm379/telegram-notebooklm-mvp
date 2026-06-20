@@ -29,6 +29,7 @@ from .telegram_backup import (
 )
 from .timeline import build_timeline
 from .transcription import TranscriptionService
+from .webapp_auth import init_data_user_id, verify_init_data
 
 logger = logging.getLogger(__name__)
 
@@ -1294,6 +1295,206 @@ LANDING_HTML = """
 """
 
 
+MINIAPP_HTML = """
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Telegram Notebook — Mini App</title>
+    <meta name="theme-color" content="#06070b" />
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --ink: #f3efe6; --muted: #98a1b2; --gold: #e9cd97; --gold-soft: #f3ddae;
+        --emerald: #34d8a8; --teal: #14b894;
+        --line: rgba(255,255,255,0.08); --card: rgba(15,20,30,0.66);
+      }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body { margin: 0; }
+      body {
+        min-height: 100vh; color: var(--ink); background: #06070b;
+        font-family: "Vazirmatn", "Inter", system-ui, -apple-system, sans-serif;
+        -webkit-font-smoothing: antialiased; overflow-x: hidden;
+        padding: 16px 14px calc(28px + env(safe-area-inset-bottom));
+      }
+      .bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; }
+      .bg::before {
+        content: ""; position: absolute; inset: -25%;
+        background:
+          radial-gradient(40% 36% at 20% 8%, rgba(20,184,148,0.24), transparent 60%),
+          radial-gradient(42% 40% at 84% 12%, rgba(233,205,151,0.20), transparent 60%),
+          radial-gradient(60% 50% at 50% 110%, rgba(36,80,120,0.30), transparent 65%),
+          linear-gradient(180deg, #06070b, #080b12 50%, #06070b);
+        animation: drift 26s ease-in-out infinite alternate;
+      }
+      @keyframes drift { 0% { transform: translateY(0) scale(1); } 100% { transform: translateY(-3%) scale(1.06); } }
+
+      .head { display: flex; align-items: center; gap: 12px; margin: 6px 2px 18px; }
+      .avatar {
+        width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center;
+        font-size: 1.2rem; font-weight: 700; color: #06120e;
+        background: linear-gradient(135deg, var(--emerald), var(--gold-soft));
+        box-shadow: 0 0 26px rgba(52,216,168,0.3);
+      }
+      .head .hi { font-size: 0.82rem; color: var(--muted); }
+      .head .name { font-size: 1.12rem; font-weight: 600; }
+      .head .name em { font-style: normal; color: var(--gold); }
+
+      .chips { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+      .chip {
+        flex: 1; min-width: 90px; padding: 12px; border-radius: 14px; text-align: center;
+        background: var(--card); border: 1px solid var(--line); backdrop-filter: blur(8px);
+      }
+      .chip b { display: block; font-size: 1.2rem; color: var(--gold); }
+      .chip span { font-size: 0.72rem; color: var(--muted); }
+
+      .card {
+        background: var(--card); border: 1px solid var(--line); border-radius: 20px;
+        padding: 16px; margin-bottom: 14px; backdrop-filter: blur(16px);
+        box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+      }
+      .card h2 { margin: 0 0 12px; font-size: 1rem; font-weight: 600; }
+      textarea {
+        width: 100%; min-height: 92px; resize: vertical; border-radius: 14px; padding: 13px;
+        font: inherit; line-height: 1.8; color: var(--ink);
+        background: rgba(255,255,255,0.04); border: 1px solid var(--line);
+      }
+      textarea:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(233,205,151,0.13); }
+      textarea::placeholder { color: rgba(152,161,178,0.6); }
+      button {
+        width: 100%; margin-top: 12px; padding: 14px; border: none; border-radius: 14px; cursor: pointer;
+        font: inherit; font-weight: 600; color: #06120e; letter-spacing: 0.2px;
+        background: linear-gradient(120deg, var(--emerald), var(--teal));
+        box-shadow: 0 12px 30px rgba(20,184,148,0.32); transition: transform .15s, filter .15s;
+      }
+      button:active { transform: translateY(1px); filter: brightness(0.97); }
+      button[disabled] { opacity: 0.6; }
+
+      .status { min-height: 20px; margin-top: 10px; font-size: 0.86rem; color: var(--emerald); }
+      .answer { white-space: pre-wrap; line-height: 1.95; }
+      .sources { margin-top: 12px; display: grid; gap: 8px; }
+      .src { padding: 12px; border-radius: 13px; background: rgba(255,255,255,0.03); border: 1px solid var(--line); font-size: 0.86rem; line-height: 1.7; }
+      .src .meta { color: var(--muted); font-size: 0.76rem; margin-bottom: 5px; }
+      .src .meta b { color: var(--gold); }
+      a { color: var(--gold); }
+      .hint { color: var(--muted); font-size: 0.82rem; line-height: 1.8; text-align: center; }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="bg" aria-hidden="true"></div>
+
+    <div class="head">
+      <div class="avatar" id="avatar">◎</div>
+      <div>
+        <div class="hi">حافظه‌ی هوشمند تلگرام</div>
+        <div class="name" id="hello">Telegram <em>Notebook</em></div>
+      </div>
+    </div>
+
+    <div class="chips" id="chips"></div>
+
+    <div class="card">
+      <h2>از آرشیو خودت بپرس</h2>
+      <textarea id="q" placeholder="مثلاً: بین چیزهایی که ذخیره کردم، کدام‌ها درباره‌ی فلان موضوع بودند؟"></textarea>
+      <button id="askBtn">پرسش از مغز AI</button>
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="card hidden" id="answerCard">
+      <h2>✦ پاسخ</h2>
+      <div class="answer" id="answer"></div>
+      <div class="sources" id="sources"></div>
+    </div>
+
+    <script>
+      var tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+      var initData = tg ? tg.initData : "";
+      if (tg) {
+        tg.ready(); tg.expand();
+        try { tg.setHeaderColor && tg.setHeaderColor("#06070b"); } catch (e) {}
+        var u = tg.initDataUnsafe && tg.initDataUnsafe.user;
+        if (u) {
+          var nm = (u.first_name || "") + (u.last_name ? " " + u.last_name : "");
+          if (nm.trim()) document.getElementById("hello").textContent = nm.trim();
+          var initials = (u.first_name || "?").trim().charAt(0).toUpperCase();
+          document.getElementById("avatar").textContent = initials || "◎";
+        }
+      }
+
+      function api(path, opts) {
+        opts = opts || {};
+        opts.headers = Object.assign({}, opts.headers, { "X-Telegram-Init-Data": initData });
+        return fetch(path, opts).then(function (r) {
+          return r.json().then(function (d) {
+            if (!r.ok) throw new Error(d.detail || "Request failed");
+            return d;
+          });
+        });
+      }
+
+      var statusEl = document.getElementById("status");
+      var answerCard = document.getElementById("answerCard");
+      var answerEl = document.getElementById("answer");
+      var sourcesEl = document.getElementById("sources");
+      var askBtn = document.getElementById("askBtn");
+
+      function loadStats() {
+        api("/api/miniapp/stats").then(function (s) {
+          var k = s.by_kind || {};
+          var media = Object.keys(k).reduce(function (a, key) { return a + (k[key] || 0); }, 0);
+          var chips = [
+            ["items", s.items || 0, "آیتم"],
+            ["sources", s.sources || 0, "منبع"],
+            ["tags", s.tags || 0, "تگ"],
+          ];
+          document.getElementById("chips").innerHTML = chips.map(function (c) {
+            return '<div class="chip"><b>' + c[1] + '</b><span>' + c[2] + '</span></div>';
+          }).join("");
+        }).catch(function (e) {
+          document.getElementById("chips").innerHTML = '<div class="hint">' +
+            (initData ? e.message : "این صفحه را از داخل ربات تلگرام و با دکمه‌ی Mini App باز کن.") + '</div>';
+        });
+      }
+
+      askBtn.addEventListener("click", function () {
+        var q = document.getElementById("q").value.trim();
+        if (!q) { statusEl.textContent = "اول سؤالت را بنویس."; return; }
+        statusEl.textContent = "در حال تفکر…";
+        askBtn.disabled = true; answerCard.classList.add("hidden");
+        api("/api/miniapp/ask", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ query: q }),
+        }).then(function (d) {
+          statusEl.textContent = "";
+          answerEl.textContent = d.answer || "";
+          var cited = {}; (d.cited || []).forEach(function (n) { cited[n] = true; });
+          sourcesEl.innerHTML = (d.sources || []).map(function (item, i) {
+            var n = i + 1;
+            var link = item.message_url ? ' · <a href="' + item.message_url + '" target="_blank" rel="noreferrer">post</a>' : "";
+            return '<div class="src"><div class="meta"><b>[' + n + ']' + (cited[n] ? " ✓" : "") + '</b> ' +
+              (item.channel_title || item.channel_url || "") + " · " + (item.media_kind || "text") + link +
+              '</div>' + (item.chunk_text || "") + '</div>';
+          }).join("");
+          answerCard.classList.remove("hidden");
+          if (tg) { try { tg.HapticFeedback.notificationOccurred("success"); } catch (e) {} }
+        }).catch(function (e) {
+          statusEl.textContent = e.message;
+        }).then(function () { askBtn.disabled = false; });
+      });
+
+      loadStats();
+    </script>
+  </body>
+</html>
+"""
+
+
 def _query_int(query: dict, name: str, *, default: int, lo: int, hi: int) -> int:
     """Read a clamped integer query param, falling back to ``default`` on bad input."""
     try:
@@ -1360,6 +1561,46 @@ class RequestHandler(BaseHTTPRequestHandler):
         )
         return False
 
+    def _miniapp_user_id(self) -> int | None:
+        """Verify the Telegram Mini App initData header and return the user's id."""
+        init_data = self.headers.get("X-Telegram-Init-Data", "")
+        token = state.settings.telegram_bot_token or ""
+        return init_data_user_id(verify_init_data(init_data, token))
+
+    def _handle_miniapp_post(self, parsed) -> None:
+        """Mini App search / ask, authenticated by initData and scoped to the user."""
+        uid = self._miniapp_user_id()
+        if uid is None:
+            self._send_json({"detail": "Mini App authentication required"}, status=HTTPStatus.UNAUTHORIZED)
+            return
+        try:
+            payload = self._read_json()
+        except json.JSONDecodeError:
+            self._send_json({"detail": "Invalid JSON payload"}, status=400)
+            return
+        query = str(payload.get("query", "")).strip()
+        if not query:
+            self._send_json({"detail": "query is required"}, status=400)
+            return
+        try:
+            results = state.search_service.search(owner_id=uid, query=query, top_k=5)
+            if parsed.path == "/api/miniapp/search":
+                self._send_json({"query": query, "results": [r.to_dict() for r in results]})
+                return
+            answer = state.search_service.generate_answer(query=query, results=results, **state.llm_params())
+            from . import citations
+            self._send_json(
+                {
+                    "query": query,
+                    "answer": answer,
+                    "sources": [r.to_dict() for r in results],
+                    "cited": citations.cited_indices(answer, len(results)),
+                }
+            )
+        except Exception as exc:
+            logger.exception("Mini App request failed")
+            self._send_json({"detail": str(exc)}, status=400)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         try:
@@ -1368,6 +1609,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path in ("/app", "/app/"):
                 self._send_html(INDEX_HTML)
+                return
+            if parsed.path in ("/miniapp", "/miniapp/"):
+                self._send_html(MINIAPP_HTML)
+                return
+            if parsed.path == "/api/miniapp/stats":
+                uid = self._miniapp_user_id()
+                if uid is None:
+                    self._send_json({"detail": "Mini App authentication required"}, status=HTTPStatus.UNAUTHORIZED)
+                    return
+                self._send_json(state.repository.archive_stats(owner_id=uid))
                 return
             if parsed.path == "/api/health":
                 config = state.runtime_config()
@@ -1489,6 +1740,13 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+
+        # Mini App endpoints authenticate via Telegram initData, not the
+        # loopback/WEB_API_TOKEN gate, so they are handled before _require_auth.
+        if parsed.path in ("/api/miniapp/ask", "/api/miniapp/search"):
+            self._handle_miniapp_post(parsed)
+            return
+
         if not self._require_auth():
             return
 
