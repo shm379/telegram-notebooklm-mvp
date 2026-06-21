@@ -1,0 +1,109 @@
+name: Daily Bug Triage
+
+# Runs Claude Code once a day to look for real, fixable bugs — in open issues
+# and in the codebase itself — and opens focused draft pull requests for them.
+#
+# Requirements (configure once in repo Settings -> Secrets and variables -> Actions):
+#   - ANTHROPIC_API_KEY  : an Anthropic API key (https://console.anthropic.com)
+#                          OR, if you use a Claude Pro/Max subscription, set
+#                          CLAUDE_CODE_OAUTH_TOKEN instead and swap the input below.
+# GITHUB_TOKEN is provided automatically by Actions.
+
+on:
+  schedule:
+    # 06:00 UTC every day (~09:30 Iran time). Adjust the cron as you like.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      focus:
+        description: "Optional focus for this run (an issue number or an area, e.g. 'search')"
+        required: false
+        type: string
+
+# Never let two triage runs overlap.
+concurrency:
+  group: daily-bug-triage
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create branches and push fixes
+  pull-requests: write # open pull requests
+  issues: write # read and comment on issues
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
+
+      - name: Run Claude bug triage
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Using a Claude Pro/Max subscription instead of an API key? Remove the
+          # line above and use this one instead:
+          #   claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Swap to a stronger model (e.g. claude-opus-4-8) for harder bugs.
+          claude_args: >-
+            --max-turns 40
+            --model claude-sonnet-4-6
+          prompt: |
+            You are running as this repository's automated daily bug-triage maintainer.
+            The project is a Python (3.11) Telegram + NotebookLM ingestion/search bot;
+            source lives in src/telegram_notebook/ and tests in tests/.
+
+            Mission: find genuine, fixable bugs and open small, focused pull requests
+            for them. Quality over quantity — it is completely fine, and often correct,
+            to open nothing on a given day. Never open speculative or low-value PRs.
+
+            Process:
+            1. Survey existing work first so you never duplicate it:
+                 - `gh issue list --state open` (pay special attention to the "bug" label)
+                 - `gh pr list --state open`
+                 - `git branch -a` (skip anything that already has a claude/ branch or PR)
+            2. Independently hunt for bugs in the code. At minimum run:
+                 - `ruff check src/ tests/`
+                 - `pytest -q`
+               Treat every failing test or lint error as a candidate. Also look for
+               clear logic errors, unhandled exceptions, resource leaks, and incorrect
+               error handling in src/telegram_notebook/.
+            3. Pick AT MOST 3 of the highest-confidence, smallest-blast-radius problems
+               to fix this run.
+            4. For each one:
+                 a. Branch off the default branch: `claude/bugfix-<short-slug>`.
+                 b. Make the minimal fix, matching existing style (ruff line-length 140,
+                    rules E, F, I, UP, B).
+                 c. When practical, add/adjust a focused test under tests/ that fails
+                    before the fix and passes after.
+                 d. Verify locally — BOTH `ruff check src/ tests/` and `pytest -q` must
+                    pass before you open anything.
+                 e. Commit with a clear message, push the branch, and open a DRAFT pull
+                    request that explains the bug, the root cause, the fix, and how you
+                    verified it. Add "Fixes #<n>" when it resolves a tracked issue.
+            5. If you investigated an open bug issue but could not confidently fix it,
+               leave one short diagnostic comment on that issue instead of a PR. If there
+               is nothing actionable at all, simply finish without creating anything.
+
+            Hard rules:
+              - NEVER push to the default branch (main). Always use a claude/ branch + PR.
+              - NEVER weaken, skip, or delete tests just to make them pass.
+              - Keep every PR small and single-purpose.
+              - Do not modify CI/deploy workflows, secrets, or generated CHANGELOG.*.md
+                files unless a fix specifically requires it.
+            ${{ github.event.inputs.focus && format('Extra focus for this run: {0}', github.event.inputs.focus) || '' }}
