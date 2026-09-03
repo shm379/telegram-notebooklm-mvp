@@ -1,11 +1,29 @@
 from __future__ import annotations
 
 import json
+import re
 import ssl
 from pathlib import Path
-from urllib import request
+from urllib import error, request
 
 import certifi
+
+#: Telegram will not send us a file larger than this via the Bot API.
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def safe_filename(name: str | None, fallback: str = "file") -> str:
+    """Reduce a Telegram-supplied file name to a single safe path segment.
+
+    The Bot API echoes ``document.file_name`` back verbatim, so it is attacker
+    controlled: ``../../.env`` escapes the temp directory and ``/etc/cron.d/x``
+    discards it entirely, because ``Path(tmp) / "/abs"`` yields ``/abs``.
+    """
+    candidate = Path(name or "").name  # strips any directory component
+    candidate = _UNSAFE_NAME.sub("_", candidate).lstrip(".")
+    return candidate or fallback
 
 
 class TelegramBotApi:
@@ -18,9 +36,21 @@ class TelegramBotApi:
         if files:
             # استفاده از requests برای ارسال فایل (ساده‌تر است)
             import requests
+
             url = f"{self.base_url}/{method}"
-            res = requests.post(url, data=payload, files=files)
-            return res.json()
+            try:
+                res = requests.post(url, data=payload, files=files, timeout=(10, 120))
+            except requests.RequestException as exc:
+                # requests puts the full URL — and therefore the bot token — in its
+                # exception messages. Never let that reach a log or a chat.
+                raise RuntimeError(f"{method} failed: {type(exc).__name__}") from None
+            try:
+                data = res.json()
+            except ValueError:
+                raise RuntimeError(f"{method} failed: HTTP {res.status_code} (non-JSON response)") from None
+            if not data.get("ok"):
+                raise RuntimeError(f"{method} failed: {data.get('description') or res.status_code}")
+            return data
             
         raw = None
         if payload is not None:
@@ -30,8 +60,20 @@ class TelegramBotApi:
             data=raw,
             headers={"Content-Type": "application/json"},
         )
-        with request.urlopen(req, timeout=90, context=self.ssl_context) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        try:
+            with request.urlopen(req, timeout=90, context=self.ssl_context) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            # Telegram reports its real errors in the body of a 4xx/5xx, which
+            # urllib would otherwise discard along with retry_after.
+            try:
+                data = json.loads(exc.read().decode("utf-8") or "{}")
+            except ValueError:
+                data = {}
+            retry_after = (data.get("parameters") or {}).get("retry_after")
+            detail = data.get("description") or f"HTTP {exc.code}"
+            suffix = f" (retry_after={retry_after})" if retry_after else ""
+            raise RuntimeError(f"{method} failed: {detail}{suffix}") from None
         if not data.get("ok"):
             raise RuntimeError(str(data))
         return data
@@ -100,12 +142,35 @@ class TelegramBotApi:
         return dict(self.call("getFile", {"file_id": file_id}).get("result", {}))
 
     def download_file(self, file_path: str, dest: Path) -> Path:
-        """Download a Bot API file (``file_path`` from getFile) to ``dest``."""
+        """Download a Bot API file (``file_path`` from getFile) to ``dest``.
+
+        ``dest`` is normalised to a single file inside its own parent directory:
+        callers build it from the Telegram-supplied file name, so without this a
+        crafted name writes anywhere the bot user can write.
+        """
+        dest = Path(dest)
+        directory = dest.parent.resolve()
+        target = (directory / safe_filename(dest.name)).resolve()
+        if target.parent != directory:
+            raise ValueError("refusing to write outside the download directory")
+
         url = f"{self.file_base_url}/{file_path}"
         req = request.Request(url)
-        with request.urlopen(req, timeout=120, context=self.ssl_context) as response:
-            dest.write_bytes(response.read())
-        return dest
+        written = 0
+        try:
+            with request.urlopen(req, timeout=120, context=self.ssl_context) as response, target.open("wb") as fh:
+                while True:
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > MAX_DOWNLOAD_BYTES:
+                        raise ValueError("downloaded file exceeds the Bot API size limit")
+                    fh.write(chunk)
+        except error.HTTPError as exc:
+            # The file URL embeds the bot token; never let urllib quote it back.
+            raise RuntimeError(f"file download failed: HTTP {exc.code}") from None
+        return target
 
     def answer_callback_query(self, callback_query_id: str) -> None:
         self.call("answerCallbackQuery", {"callback_query_id": callback_query_id})

@@ -72,6 +72,13 @@ def cluster_embeddings(
             if sim > best_sim:
                 best_sim, best_i = sim, ci
 
+        # An archive re-embedded with a different model holds vectors of two
+        # sizes. cosine_similarity returns 0.0 for those, but the max_clusters
+        # branch below would still attach one to a centroid it cannot be summed
+        # with — which used to abort the whole run on zip(strict=True).
+        if best_i >= 0 and len(emb) != len(centroids[best_i]):
+            best_i, best_sim = -1, -1.0
+
         if best_i >= 0 and (best_sim >= threshold or len(centroids) >= max_clusters):
             members[best_i].append(idx)
             sums[best_i] = [s + e for s, e in zip(sums[best_i], emb, strict=True)]

@@ -111,7 +111,10 @@ def test_manager_start_and_stop():
     mgr = DeletedWatcherManager(repository=SimpleNamespace(), build_client=lambda user: client)
     mgr.start_for_user({"bot_user_id": 1})
     # Wait until the watcher is actually blocked in run_until_disconnected.
-    assert client.started.wait(2)
+    # Generous, because this only waits for the OS to schedule a thread: on a
+    # loaded machine (a busy CI runner, a full suite in parallel) two seconds
+    # is not enough, and the test failed for that reason alone.
+    assert client.started.wait(30)
     assert mgr.is_running(1)
     mgr.stop_for_user(1)
     for _ in range(100):

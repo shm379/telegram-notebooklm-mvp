@@ -122,7 +122,23 @@ def get_settings() -> Settings:
     return settings
 
 
+def _env_safe(key: str, value: str | None) -> str:
+    """Reject values that would inject extra assignments into ``.env``.
+
+    Values reach here straight from ``POST /api/settings``, and the writer below
+    emits ``KEY=value`` one per line — so a value containing a newline defines a
+    second variable. Overwriting ``WEB_API_TOKEN`` that way bypasses auth on the
+    next reload.
+    """
+    if value is None:
+        return ""
+    if "\n" in value or "\r" in value or "\x00" in value:
+        raise ValueError(f"invalid value for {key}: line breaks are not allowed")
+    return value
+
+
 def upsert_env_values(updates: dict[str, str | None]) -> None:
+    updates = {key: _env_safe(key, value) for key, value in updates.items()}
     lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.exists() else []
     pending = dict(updates)
     output: list[str] = []
