@@ -37,6 +37,8 @@ class Settings:
     telegram_bot_token: str | None
     openai_api_key: str | None
     gemini_api_key: str | None
+    nabugate_base_url: str
+    nabugate_api_key: str | None
     vertex_project_id: str | None
     vertex_region: str | None
     vertex_index_id: str | None
@@ -66,6 +68,16 @@ class Settings:
         self.media_dir.mkdir(parents=True, exist_ok=True)
 
 
+def _default_provider() -> str:
+    """Prefer the gateway whenever it is configured.
+
+    A deployment that has never set NABUGATE_API_KEY keeps its old behaviour
+    rather than failing on startup; one that sets it stops holding provider keys
+    without also having to set three separate *_PROVIDER variables.
+    """
+    return "nabugate" if os.environ.get("NABUGATE_API_KEY", "").strip() else "ollama"
+
+
 @lru_cache
 def get_settings() -> Settings:
     load_dotenv(override=True)
@@ -82,6 +94,12 @@ def get_settings() -> Settings:
         telegram_bot_token=_str_env("TELEGRAM_BOT_TOKEN"),
         openai_api_key=_str_env("OPENAI_API_KEY"),
         gemini_api_key=_str_env("GEMINI_API_KEY"),
+        # The gateway is the only AI credential this project should need. The
+        # two keys above stay readable so an existing deployment keeps working,
+        # but nothing new should be pointed at them.
+        nabugate_base_url=_str_env("NABUGATE_BASE_URL", "https://gate.nabuxai.com/v1")
+        or "https://gate.nabuxai.com/v1",
+        nabugate_api_key=_str_env("NABUGATE_API_KEY"),
         vertex_project_id=_str_env("VERTEX_PROJECT_ID"),
         vertex_region=_str_env("VERTEX_REGION", "us-central1") or "us-central1",
         vertex_index_id=_str_env("VERTEX_INDEX_ID"),
@@ -100,10 +118,10 @@ def get_settings() -> Settings:
             "base",
         )
         or "base",
-        embedding_provider=(_str_env("EMBEDDING_PROVIDER", "ollama") or "ollama").lower(),
+        embedding_provider=(_str_env("EMBEDDING_PROVIDER", _default_provider()) or _default_provider()).lower(),
         embedding_model=_str_env("EMBEDDING_MODEL", "nomic-embed-text")
         or "nomic-embed-text",
-        llm_provider=(_str_env("LLM_PROVIDER", "ollama") or "ollama").lower(),
+        llm_provider=(_str_env("LLM_PROVIDER", _default_provider()) or _default_provider()).lower(),
         llm_model=_str_env("LLM_MODEL", "llama3.1") or "llama3.1",
         ollama_base_url=_str_env("OLLAMA_BASE_URL", "http://localhost:11434")
         or "http://localhost:11434",
@@ -163,3 +181,38 @@ def upsert_env_values(updates: dict[str, str | None]) -> None:
 
     ENV_PATH.write_text("\n".join(output) + "\n", encoding="utf-8")
     get_settings.cache_clear()
+
+
+def provider_credentials(settings: Settings, provider: str | None) -> tuple[str | None, str | None]:
+    """The (api_key, base_url) a provider needs, chosen in exactly one place.
+
+    Four call sites used to repeat the same ternary, so adding the gateway would
+    otherwise have meant adding a fifth branch to each of them.
+    """
+    provider = (provider or "").lower()
+    if provider == "nabugate":
+        return settings.nabugate_api_key, settings.nabugate_base_url
+    if provider == "gemini":
+        return settings.gemini_api_key, None
+    if provider in ("ollama", "local"):
+        return None, settings.ollama_base_url
+    return settings.openai_api_key, None
+
+
+#: What to ask the gateway for when no explicit model is configured.
+#: ``notebook-embed`` is this project's own single-rung alias — see the comment
+#: on NABUGATE_EMBED_DIM for why it must not be ``nabu-embed``.
+NABUGATE_DEFAULT_LLM_MODEL = "nabu-fast"
+NABUGATE_DEFAULT_EMBED_MODEL = "notebook-embed"
+
+
+def model_for(settings: Settings, provider: str | None, role: str) -> str:
+    """The model name for a role, defaulting to the gateway's aliases."""
+    provider = (provider or "").lower()
+    configured = settings.embedding_model if role == "embedding" else settings.llm_model
+    if provider != "nabugate":
+        return configured
+    # An operator who set EMBEDDING_MODEL for Ollama must not have that value
+    # silently sent to the gateway as an alias it does not know.
+    default = NABUGATE_DEFAULT_EMBED_MODEL if role == "embedding" else NABUGATE_DEFAULT_LLM_MODEL
+    return configured if configured.startswith(("nabu-", "notebook-")) else default

@@ -11,7 +11,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from .config import get_settings, upsert_env_values
+from .config import get_settings, model_for, provider_credentials, upsert_env_values
 from .db import Repository, connect
 from .embeddings import EmbeddingService
 from .extraction import ExtractionService
@@ -64,11 +64,12 @@ class AppState:
             self.settings = get_settings()
             self.repository = Repository(connect(self.settings.db_path))
             self.repository.init()
+            embed_key, embed_base = provider_credentials(self.settings, self.settings.embedding_provider)
             self.embeddings = EmbeddingService(
                 provider=self.settings.embedding_provider,
-                api_key=self._api_key_for(self.settings.embedding_provider),
-                model=self.settings.embedding_model,
-                base_url=self.settings.ollama_base_url,
+                api_key=embed_key,
+                model=model_for(self.settings, self.settings.embedding_provider, "embedding"),
+                base_url=embed_base,
             )
             self.transcription = TranscriptionService(
                 provider=self.settings.transcription_provider,

@@ -15,7 +15,7 @@ from pathlib import Path
 from . import citations, toolset
 from .bot_api import TelegramBotApi
 from .clustering import build_topics, label_cluster
-from .config import Settings, get_settings
+from .config import Settings, get_settings, model_for, provider_credentials
 from .db import Repository, connect
 from .deleted_watcher import DeletedWatcherManager
 from .embeddings import EmbeddingService
@@ -90,6 +90,17 @@ def _llm_callable_for(settings, user: dict | None):
             project_id=getattr(settings, "vertex_project_id", None),
             region=getattr(settings, "vertex_region", None) or "us-central1",
         )
+    if provider == "nabugate":
+        api_key, base_url = provider_credentials(settings, "nabugate")
+        if not api_key:
+            return None
+        return lambda prompt: generate_text(
+            provider="nabugate",
+            model=model_for(settings, "nabugate", "llm"),
+            prompt=prompt,
+            api_key=api_key,
+            base_url=base_url,
+        )
     if provider == "openai":
         api_key = (user.get("openai_api_key") if user else None) or getattr(settings, "openai_api_key", None)
         if not api_key:
@@ -127,14 +138,17 @@ def build_services() -> BotServices:
     repository = Repository(connect(settings.db_path))
     repository.init()
 
+    embed_key, embed_base = provider_credentials(settings, settings.embedding_provider)
     embeddings = EmbeddingService(
         provider=settings.embedding_provider,
-        api_key=settings.gemini_api_key if settings.embedding_provider == "gemini" else settings.openai_api_key,
-        model=settings.embedding_model,
+        api_key=embed_key,
+        base_url=embed_base,
+        model=model_for(settings, settings.embedding_provider, "embedding"),
     )
+    tr_key, _ = provider_credentials(settings, settings.transcription_provider)
     transcription = TranscriptionService(
         provider=settings.transcription_provider,
-        api_key=settings.gemini_api_key if settings.transcription_provider == "gemini" else settings.openai_api_key,
+        api_key=tr_key,
         model=settings.transcription_model,
     )
     pipeline = IngestionPipeline(
@@ -232,6 +246,10 @@ class NotebookBot:
             raise RuntimeError("Operation timed out. Please check your connection or try again.") from exc
 
     def _api_key_for_user(self, user: dict | None, provider: str) -> str | None:
+        if provider == "nabugate":
+            # Deliberately not per-user: the gateway token is the project's, and
+            # spend is attributed to the project rather than to whoever typed.
+            return self.services.settings.nabugate_api_key
         if provider == "gemini":
             return (user.get("gemini_api_key") if user else None) or self.services.settings.gemini_api_key
         if provider == "openai":

@@ -250,6 +250,7 @@ class Repository:
                 self._ensure_channel_owner(conn)
                 self._ensure_bot_user_columns(conn)
                 self._ensure_rule_columns(conn)
+                self._ensure_chunk_columns(conn)
                 conn.commit()
 
     @staticmethod
@@ -262,6 +263,22 @@ class Repository:
             conn.execute("ALTER TABLE bot_users ADD COLUMN ai_autotag INTEGER DEFAULT 0")
         if "watch_deleted" not in cols:
             conn.execute("ALTER TABLE bot_users ADD COLUMN watch_deleted INTEGER DEFAULT 0")
+
+    @staticmethod
+    def _ensure_chunk_columns(conn: sqlite3.Connection) -> None:
+        """Record which embedding space each stored vector belongs to (idempotent).
+
+        Without these, a corpus embedded by two different models is
+        indistinguishable from one embedded by a single model: the cosine
+        between vectors from two spaces is a plausible-looking number with no
+        relationship to similarity, so nothing fails and recall just decays.
+        With them, a stale vector is a query away from being found.
+        """
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()]
+        if "embed_model" not in cols:
+            conn.execute("ALTER TABLE chunks ADD COLUMN embed_model TEXT")
+        if "embed_dim" not in cols:
+            conn.execute("ALTER TABLE chunks ADD COLUMN embed_dim INTEGER")
 
     @staticmethod
     def _ensure_rule_columns(conn: sqlite3.Connection) -> None:
@@ -351,11 +368,15 @@ class Repository:
             with sqlite3.connect(self.path) as conn:
                 conn.execute("DELETE FROM chunks WHERE media_item_id = ?", (media_item_id,))
                 for chunk in chunks:
-                    embedding_blob = json.dumps(chunk["embedding"]).encode('utf-8') if chunk.get("embedding") else None
+                    vector = chunk.get("embedding")
+                    embedding_blob = json.dumps(vector).encode('utf-8') if vector else None
                     conn.execute("""
-                        INSERT INTO chunks (media_item_id, chunk_index, text, embedding, start_char, end_char)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (media_item_id, chunk["chunk_index"], chunk["text"], embedding_blob, chunk["start_char"], chunk["end_char"]))
+                        INSERT INTO chunks (media_item_id, chunk_index, text, embedding, start_char, end_char,
+                                            embed_model, embed_dim)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (media_item_id, chunk["chunk_index"], chunk["text"], embedding_blob,
+                          chunk["start_char"], chunk["end_char"],
+                          chunk.get("embed_model"), len(vector) if vector else None))
                 conn.commit()
 
     def mark_media_transcribed(self, *, media_item_id: int, transcript_text: str) -> None:

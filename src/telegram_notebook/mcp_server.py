@@ -20,7 +20,7 @@ import sys
 from typing import Any
 
 from .clustering import build_topics, label_cluster
-from .config import get_settings
+from .config import get_settings, model_for, provider_credentials
 from .db import Repository, connect
 from .embeddings import EmbeddingService
 from .llm import generate_text
@@ -370,10 +370,12 @@ def build_mcp_server() -> McpServer:
     settings = get_settings()
     repository = Repository(connect(settings.db_path))
     repository.init()
+    embed_key, embed_base = provider_credentials(settings, settings.embedding_provider)
     embeddings = EmbeddingService(
         provider=settings.embedding_provider,
-        api_key=settings.gemini_api_key if settings.embedding_provider == "gemini" else settings.openai_api_key,
-        model=settings.embedding_model,
+        api_key=embed_key,
+        base_url=embed_base,
+        model=model_for(settings, settings.embedding_provider, "embedding"),
     )
     search_service = SearchService(repository, embeddings)
     owner_id = int(os.environ.get("MCP_OWNER_ID") or 0)

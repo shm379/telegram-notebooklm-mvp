@@ -83,6 +83,16 @@ def ollama_embed(
     return [float(x) for x in embedding] if embedding else None
 
 
+class EmptyCompletionError(RuntimeError):
+    """An upstream returned 200 with no content.
+
+    NabuGate's router already treats this as a failed target and moves down the
+    chain, so seeing it here means every rung produced nothing. Presenting it as
+    a successful empty answer is how an empty generation becomes a style
+    exemplar for the next one.
+    """
+
+
 def openai_generate(
     *,
     api_key: str | None,
@@ -120,6 +130,20 @@ def generate_text(
     OpenAI/Gemini ignore it and use their own (cloud) endpoints.
     """
     provider = (provider or "ollama").lower()
+    if provider == "nabugate":
+        # The gateway is OpenAI-wire-compatible, so this is the same call with a
+        # different base_url. `model` is an alias (nabu-fast / nabu-smart) or an
+        # agent name; the gateway picks the provider and handles fallback.
+        text = openai_generate(
+            api_key=api_key,
+            base_url=base_url,
+            model=model or "nabu-fast",
+            prompt=prompt,
+            temperature=temperature,
+        )
+        if not (text or "").strip():
+            raise EmptyCompletionError(f"{model or 'nabu-fast'} returned an empty completion")
+        return text
     if provider in ("ollama", "local"):
         return ollama_generate(base_url=base_url, model=model or DEFAULT_OLLAMA_LLM_MODEL, prompt=prompt, temperature=temperature)
     if provider == "gemini":

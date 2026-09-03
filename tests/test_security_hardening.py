@@ -88,3 +88,84 @@ def test_cluster_embeddings_survives_mixed_dimensions():
     assert clusters, "must return clusters rather than raising"
     total = sum(len(c) for c in clusters)
     assert total == len(items), "every item must land in exactly one cluster"
+
+
+# --- NabuGate: a stored index must never receive a second embedding space ---
+
+def test_embedding_service_refuses_a_wrong_width_from_the_gateway():
+    """gemini-embedding-001 returns 3072 unless asked for 1536.
+
+    Storing that vector would not fail — it would sit in the same column and
+    return a plausible cosine that means nothing. Refusing is the whole point.
+    """
+    from telegram_notebook import embeddings as emb
+
+    class _Resp:
+        def __init__(self, vec):
+            self.data = [type("D", (), {"embedding": vec})()]
+
+    class _Client:
+        def __init__(self, vec):
+            self.seen = {}
+            self.embeddings = type(
+                "E", (), {"create": lambda _s, **kw: (self.seen.update(kw), _Resp(vec))[1]}
+            )()
+
+    svc = emb.EmbeddingService(
+        provider="nabugate", api_key="k", model="notebook-embed",
+        base_url="https://gate.nabuxai.com/v1",
+    )
+    svc.client = _Client([0.0] * 3072)
+
+    with pytest.raises(emb.EmbeddingDimensionError):
+        svc.embed("سلام")
+
+    # And it must have asked for the right width in the first place.
+    assert svc.client.seen.get("dimensions") == emb.NABUGATE_EMBED_DIM
+
+
+def test_embedding_service_accepts_the_configured_width():
+    from telegram_notebook import embeddings as emb
+
+    class _Resp:
+        def __init__(self, vec):
+            self.data = [type("D", (), {"embedding": vec})()]
+
+    class _Client:
+        def __init__(self, vec):
+            self.embeddings = type("E", (), {"create": lambda _s, **kw: _Resp(vec)})()
+
+    svc = emb.EmbeddingService(
+        provider="nabugate", api_key="k", model="notebook-embed", base_url="x",
+    )
+    svc.client = _Client([0.1] * emb.NABUGATE_EMBED_DIM)
+    assert len(svc.embed("سلام")) == emb.NABUGATE_EMBED_DIM
+
+
+def test_empty_completion_is_a_failure_not_an_answer(monkeypatch):
+    """The gateway already walked its whole chain to produce this nothing."""
+    from telegram_notebook import llm
+
+    monkeypatch.setattr(llm, "openai_generate", lambda **kw: "   ")
+    with pytest.raises(llm.EmptyCompletionError):
+        llm.generate_text(provider="nabugate", model="nabu-fast", prompt="hi", api_key="k")
+
+
+def test_gateway_is_the_default_provider_once_its_key_is_set(monkeypatch):
+    from telegram_notebook import config
+
+    monkeypatch.setenv("NABUGATE_API_KEY", "tok")
+    assert config._default_provider() == "nabugate"
+    monkeypatch.setenv("NABUGATE_API_KEY", "")
+    assert config._default_provider() == "ollama"
+
+
+def test_gateway_model_defaults_do_not_leak_an_ollama_model_name():
+    """EMBEDDING_MODEL=nomic-embed-text must not be sent to the gateway."""
+    from telegram_notebook import config
+
+    settings = config.get_settings()
+    object.__setattr__(settings, "embedding_model", "nomic-embed-text")
+    assert config.model_for(settings, "nabugate", "embedding") == config.NABUGATE_DEFAULT_EMBED_MODEL
+    object.__setattr__(settings, "embedding_model", "notebook-embed")
+    assert config.model_for(settings, "nabugate", "embedding") == "notebook-embed"

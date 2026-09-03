@@ -6,6 +6,18 @@ from collections.abc import Sequence
 from .llm import ollama_embed
 from .provider_http import gemini_embed_text
 
+#: The width of the ``notebook-embed`` alias on NabuGate.
+#:
+#: gemini-embedding-001 behind that alias defaults to 3072, so the width is only
+#: 1536 because we ask for it on every request. Everything already written to
+#: ``chunks.embedding`` is 1536, and a vector of another width in that column
+#: would not fail — it would return a plausible cosine that means nothing.
+NABUGATE_EMBED_DIM = 1536
+
+
+class EmbeddingDimensionError(RuntimeError):
+    """An embedding came back a different width than the stored index uses."""
+
 
 class EmbeddingService:
     def __init__(self, *, provider: str, api_key: str | None, model: str, base_url: str | None = None) -> None:
@@ -29,7 +41,9 @@ class EmbeddingService:
             if self.provider != "gemini":
                 from openai import OpenAI
 
-                self.client = OpenAI(api_key=self.api_key)
+                # NabuGate speaks the OpenAI wire protocol, so it is the same
+                # client with a different base_url and the project token.
+                self.client = OpenAI(api_key=self.api_key, base_url=self.base_url or None)
         return self.client
 
     def embed(self, text: str, *, task_type: str | None = None, project_id: str | None = None, region: str = "us-central1") -> list[float] | None:
@@ -53,12 +67,29 @@ class EmbeddingService:
         client = self._get_client()
         if not client:
             return None
-        response = client.embeddings.create(
-            model=self.model,
-            input=text,
-            encoding_format="float",
-        )
-        return list(response.data[0].embedding)
+
+        kwargs: dict[str, object] = {
+            "model": self.model,
+            "input": text,
+            "encoding_format": "float",
+        }
+        if self.provider == "nabugate":
+            # Required, not optional: the alias is single-rung precisely so that
+            # nothing can quietly write a second geometry into the column, and
+            # the model behind it returns 3072 unless asked otherwise.
+            kwargs["dimensions"] = NABUGATE_EMBED_DIM
+
+        response = client.embeddings.create(**kwargs)
+        vector = list(response.data[0].embedding)
+
+        if self.provider == "nabugate" and len(vector) != NABUGATE_EMBED_DIM:
+            # Refuse rather than store. A failed embed is retryable; a column
+            # holding two embedding spaces is not detectable after the fact.
+            raise EmbeddingDimensionError(
+                f"{self.model} returned {len(vector)} dimensions, expected {NABUGATE_EMBED_DIM}"
+            )
+
+        return vector
 
 
 def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
