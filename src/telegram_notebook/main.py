@@ -71,11 +71,12 @@ class AppState:
                 model=model_for(self.settings, self.settings.embedding_provider, "embedding"),
                 base_url=embed_base,
             )
+            tr_key, tr_base = provider_credentials(self.settings, self.settings.transcription_provider)
             self.transcription = TranscriptionService(
                 provider=self.settings.transcription_provider,
-                api_key=self._api_key_for(self.settings.transcription_provider),
-                model=self.settings.transcription_model,
-                base_url=self.settings.ollama_base_url,
+                api_key=tr_key,
+                model=model_for(self.settings, self.settings.transcription_provider, "transcription"),
+                base_url=tr_base,
             )
             # OCR/PDF extraction is Gemini-only; DOCX/XLSX are parsed locally.
             self.extraction = ExtractionService(

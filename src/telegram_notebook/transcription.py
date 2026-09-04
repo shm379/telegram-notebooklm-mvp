@@ -29,7 +29,10 @@ class TranscriptionService:
             if self.provider != "gemini":
                 from openai import OpenAI
 
-                self.client = OpenAI(api_key=self.api_key)
+                # base_url, not just the key: NabuGate speaks the OpenAI wire
+                # protocol, so without this a gateway-provider request would be
+                # sent to api.openai.com carrying a gateway token.
+                self.client = OpenAI(api_key=self.api_key, base_url=self.base_url or None)
         return self.client
 
     def _get_whisper(self):

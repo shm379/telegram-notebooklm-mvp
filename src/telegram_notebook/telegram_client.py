@@ -106,8 +106,37 @@ def _canonical_channel_url(username: str | None, raw_url: str, telegram_id: int)
     return f"telegram://channel/{telegram_id}"
 
 
+async def resolve_entity(client: Any, channel_url: str):
+    """Resolve usernames, links, canonical private-chat URLs, and numeric IDs."""
+    import re
+
+    from telethon.tl.types import PeerChannel, PeerChat
+
+    ref = channel_url.strip()
+    candidates: list[Any] = []
+    match = re.fullmatch(r"telegram://(?:channel|chat)/(-?\d+)", ref)
+    if match:
+        value = int(match.group(1))
+        candidates = [value] if value < 0 else [PeerChannel(value), PeerChat(value), value]
+    elif re.fullmatch(r"-?\d+", ref):
+        candidates = [int(ref)]
+
+    if not candidates:
+        return await client.get_entity(ref)
+
+    for warm_cache in (False, True):
+        if warm_cache:
+            await client.get_dialogs(limit=None)
+        for candidate in candidates:
+            try:
+                return await client.get_entity(candidate)
+            except (ValueError, TypeError):
+                continue
+    raise ValueError(f"Could not find chat {channel_url!r} in this account's dialogs")
+
+
 async def fetch_channel_info(client: Any, channel_url: str) -> ChannelInfo:
-    entity = await client.get_entity(channel_url)
+    entity = await resolve_entity(client, channel_url)
     username = getattr(entity, "username", None)
     return ChannelInfo(
         telegram_id=int(entity.id),
@@ -123,7 +152,7 @@ async def iter_media_messages(
     channel_url: str,
     limit: int,
 ) -> list[MediaMessage]:
-    entity = await client.get_entity(channel_url)
+    entity = await resolve_entity(client, channel_url)
     username = getattr(entity, "username", None)
     results: list[MediaMessage] = []
 
@@ -204,7 +233,7 @@ async def iter_all_messages(
     limit: int | None,
     min_id: int = 0,
 ) -> list[MediaMessage]:
-    entity = await client.get_entity(channel_url)
+    entity = await resolve_entity(client, channel_url)
     username = getattr(entity, "username", None)
     results: list[MediaMessage] = []
 

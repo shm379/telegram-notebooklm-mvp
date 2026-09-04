@@ -204,15 +204,26 @@ def provider_credentials(settings: Settings, provider: str | None) -> tuple[str 
 #: on NABUGATE_EMBED_DIM for why it must not be ``nabu-embed``.
 NABUGATE_DEFAULT_LLM_MODEL = "nabu-fast"
 NABUGATE_DEFAULT_EMBED_MODEL = "notebook-embed"
+#: The gateway's transcription alias. Multilingual and timestamped — the same
+#: chain ReelMind uses — so a Persian voice note comes back as Persian text
+#: rather than a transliteration.
+NABUGATE_DEFAULT_TRANSCRIBE_MODEL = "nabu-transcribe"
 
 
 def model_for(settings: Settings, provider: str | None, role: str) -> str:
     """The model name for a role, defaulting to the gateway's aliases."""
     provider = (provider or "").lower()
-    configured = settings.embedding_model if role == "embedding" else settings.llm_model
+    configured = {
+        "embedding": settings.embedding_model,
+        "transcription": settings.transcription_model,
+    }.get(role, settings.llm_model)
     if provider != "nabugate":
         return configured
-    # An operator who set EMBEDDING_MODEL for Ollama must not have that value
-    # silently sent to the gateway as an alias it does not know.
-    default = NABUGATE_DEFAULT_EMBED_MODEL if role == "embedding" else NABUGATE_DEFAULT_LLM_MODEL
+    # An operator who set EMBEDDING_MODEL for Ollama, or TRANSCRIPTION_MODEL for
+    # Gemini, must not have that value silently sent to the gateway as an alias
+    # it has never heard of.
+    default = {
+        "embedding": NABUGATE_DEFAULT_EMBED_MODEL,
+        "transcription": NABUGATE_DEFAULT_TRANSCRIBE_MODEL,
+    }.get(role, NABUGATE_DEFAULT_LLM_MODEL)
     return configured if configured.startswith(("nabu-", "notebook-")) else default

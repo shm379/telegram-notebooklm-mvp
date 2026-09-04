@@ -145,11 +145,12 @@ def build_services() -> BotServices:
         base_url=embed_base,
         model=model_for(settings, settings.embedding_provider, "embedding"),
     )
-    tr_key, _ = provider_credentials(settings, settings.transcription_provider)
+    tr_key, tr_base = provider_credentials(settings, settings.transcription_provider)
     transcription = TranscriptionService(
         provider=settings.transcription_provider,
         api_key=tr_key,
-        model=settings.transcription_model,
+        model=model_for(settings, settings.transcription_provider, "transcription"),
+        base_url=tr_base,
     )
     pipeline = IngestionPipeline(
         settings=settings,
@@ -263,10 +264,14 @@ class NotebookBot:
             if user and user.get("preferred_embedding_model")
             else self.services.settings.embedding_model
         )
+        _, base = provider_credentials(self.services.settings, provider)
+        if provider == "nabugate":
+            model = model_for(self.services.settings, provider, "embedding")
         return EmbeddingService(
             provider=provider,
             api_key=self._api_key_for_user(user, provider),
             model=model,
+            base_url=base,
         )
 
     def _transcription_service_for_user(self, user: dict | None) -> TranscriptionService:
@@ -276,10 +281,14 @@ class NotebookBot:
             if user and user.get("preferred_transcription_model")
             else self.services.settings.transcription_model
         )
+        _, base = provider_credentials(self.services.settings, provider)
+        if provider == "nabugate":
+            model = model_for(self.services.settings, provider, "transcription")
         return TranscriptionService(
             provider=provider,
             api_key=self._api_key_for_user(user, provider),
             model=model,
+            base_url=base,
         )
 
     def _extraction_service_for_user(self, user: dict | None) -> ExtractionService:
